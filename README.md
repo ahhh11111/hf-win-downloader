@@ -2,7 +2,7 @@
 
 [![Windows Build](https://github.com/ahhh11111/hf-win-downloader/actions/workflows/windows-build.yml/badge.svg)](https://github.com/ahhh11111/hf-win-downloader/actions/workflows/windows-build.yml)
 [![Release](https://img.shields.io/github/v/release/ahhh11111/hf-win-downloader?label=release)](https://github.com/ahhh11111/hf-win-downloader/releases)
-[![License: 0BSD](https://img.shields.io/badge/license-0BSD-blue.svg)](LICENSE)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
 HF Downloader 是一个面向 Windows 的 Hugging Face Hub 桌面下载器。它用 Electron 提供图形界面，底层调用官方 `hf download` 命令，适合下载模型、数据集和 Space 仓库，也支持把常用任务保存为收藏或加入队列。
 
@@ -89,4 +89,4 @@ npm run release:win -- 0.2.0
 
 ## 许可证
 
-本项目使用 [0BSD](LICENSE) 许可证。你可以自由使用、复制、修改和分发这个项目，包括商业用途，也不要求署名。
+本项目使用 [MIT](LICENSE) 许可证。你可以自由使用、复制、修改和分发这个项目，包括商业用途；保留许可证和版权声明即可。
