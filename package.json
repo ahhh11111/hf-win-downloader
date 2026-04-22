@@ -18,7 +18,7 @@
     "windows"
   ],
   "author": "",
-  "license": "MIT",
+  "license": "0BSD",
   "build": {
     "appId": "com.local.hfdownloader",
     "productName": "HF Downloader",
