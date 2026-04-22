@@ -28,7 +28,7 @@ npm run build:win
 打包成功后，portable 版本会输出到 `dist/`，文件名类似：
 
 ```text
-HF Downloader-0.1.0-x64-portable.exe
+HF-Downloader-0.1.0-x64-portable.exe
 ```
 
 应用图标由脚本生成：
@@ -45,8 +45,8 @@ Windows 打包时，`scripts/after-pack.js` 会把 `build/icon.ico` 写入应用
 
 - push 到 `main`：自动安装依赖、运行 smoke 测试并打包 Windows portable exe。
 - pull request 到 `main`：自动执行同样的验证和打包流程。
-- 发布 GitHub Release：自动构建 exe，并把产物上传到该 release。
-- 手动触发 workflow：可在 GitHub Actions 页面随时生成构建产物。
+- 发布 GitHub Release：自动构建 exe，生成 SHA256 校验文件，并把产物上传到该 release。
+- 手动触发 workflow：可在 GitHub Actions 页面随时生成构建产物和校验文件。
 
 ## 发布 Release
 
@@ -56,18 +56,20 @@ Windows 打包时，`scripts/after-pack.js` 会把 `build/icon.ico` 写入应用
 "version": "0.1.0"
 ```
 
-发布新版本时，建议先更新版本号，然后执行本地验证：
+发布新版本时，推荐使用一键脚本：
 
 ```powershell
-npm run smoke
-npm run build:win
+npm run release:win -- patch
 ```
 
-再创建 tag 和 release，例如：
+也可以指定 `minor`、`major` 或完整版本号：
 
 ```powershell
-gh release create v0.1.0 "dist/HF Downloader-0.1.0-x64-portable.exe" --title "HF Downloader v0.1.0"
+npm run release:win -- minor
+npm run release:win -- 0.2.0
 ```
+
+脚本会检查工作区是否干净，更新 `package.json` 和 `package-lock.json`，运行 smoke 测试，打包 Windows portable exe，生成 `.sha256` 校验文件，提交版本号，创建 tag，推送到 GitHub，并创建 release。
 
 ## 命令依据
 

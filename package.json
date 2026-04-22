@@ -8,7 +8,8 @@
     "start": "electron .",
     "smoke": "node scripts/smoke.js",
     "icon": "node scripts/generate-icon.js",
-    "build:win": "node scripts/build-win.js"
+    "build:win": "node scripts/build-win.js",
+    "release:win": "node scripts/release.js"
   },
   "keywords": [
     "huggingface",
@@ -52,7 +53,7 @@
       ]
     },
     "portable": {
-      "artifactName": "${productName}-${version}-${arch}-portable.${ext}"
+      "artifactName": "HF-Downloader-${version}-${arch}-portable.${ext}"
     },
     "nsis": {
       "installerIcon": "build/icon.ico",
