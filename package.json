@@ -1,0 +1,68 @@
+{
+  "name": "hf-win-downloader",
+  "version": "0.1.0",
+  "description": "A streamlined Windows desktop downloader for Hugging Face Hub repositories.",
+  "main": "main.js",
+  "private": true,
+  "scripts": {
+    "start": "electron .",
+    "smoke": "node scripts/smoke.js",
+    "icon": "node scripts/generate-icon.js",
+    "build:win": "node scripts/build-win.js"
+  },
+  "keywords": [
+    "huggingface",
+    "electron",
+    "downloader",
+    "windows"
+  ],
+  "author": "",
+  "license": "MIT",
+  "build": {
+    "appId": "com.local.hfdownloader",
+    "productName": "HF Downloader",
+    "asar": true,
+    "directories": {
+      "output": "dist"
+    },
+    "icon": "build/icon.ico",
+    "afterPack": "scripts/after-pack.js",
+    "toolsets": {
+      "winCodeSign": "1.1.0"
+    },
+    "files": [
+      "main.js",
+      "preload.js",
+      "index.html",
+      "build/**/*",
+      "src/**/*",
+      "README.md",
+      "package.json"
+    ],
+    "win": {
+      "signAndEditExecutable": false,
+      "icon": "build/icon.ico",
+      "target": [
+        {
+          "target": "portable",
+          "arch": [
+            "x64"
+          ]
+        }
+      ]
+    },
+    "portable": {
+      "artifactName": "${productName}-${version}-${arch}-portable.${ext}"
+    },
+    "nsis": {
+      "installerIcon": "build/icon.ico",
+      "uninstallerIcon": "build/icon.ico",
+      "installerHeaderIcon": "build/icon.ico"
+    }
+  },
+  "devDependencies": {
+    "electron": "^41.2.2",
+    "electron-builder": "^26.8.1",
+    "rcedit": "^5.0.2"
+  }
+}

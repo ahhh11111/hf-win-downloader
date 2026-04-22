@@ -1,0 +1,285 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>HF Downloader</title>
+    <link rel="stylesheet" href="./src/styles.css" />
+  </head>
+  <body>
+    <main class="app-shell">
+      <section class="left-pane" aria-label="下载配置">
+        <header class="titlebar">
+          <div>
+            <h1>HF Downloader</h1>
+            <p id="cliStatus">正在检测 CLI...</p>
+          </div>
+          <button class="icon-button" id="checkCliButton" title="检查环境" type="button" aria-label="检查环境">
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M21 12a9 9 0 1 1-2.64-6.36" />
+              <path d="M21 3v6h-6" />
+            </svg>
+          </button>
+        </header>
+
+        <div class="field-group">
+          <label>仓库类型</label>
+          <input id="repoType" name="repoType" type="hidden" />
+          <div class="segmented" data-field="repoType">
+            <button type="button" data-value="model">模型</button>
+            <button type="button" data-value="dataset">数据集</button>
+            <button type="button" data-value="space">Space</button>
+          </div>
+        </div>
+
+        <div class="field-group">
+          <label for="repoId">仓库 ID</label>
+          <input id="repoId" name="repoId" autocomplete="off" spellcheck="false" />
+        </div>
+
+        <div class="field-group">
+          <label for="files">指定文件</label>
+          <textarea id="files" name="files" rows="3" spellcheck="false" placeholder="config.json&#10;model.safetensors"></textarea>
+        </div>
+
+        <div class="two-col">
+          <div class="field-group">
+            <label for="include">Include</label>
+            <input id="include" name="include" spellcheck="false" placeholder="*.safetensors" />
+          </div>
+          <div class="field-group">
+            <label for="exclude">Exclude</label>
+            <input id="exclude" name="exclude" spellcheck="false" placeholder="*.bin" />
+          </div>
+        </div>
+
+        <div class="field-group">
+          <label for="localDir">保存到</label>
+          <div class="path-row">
+            <input id="localDir" name="localDir" spellcheck="false" />
+            <button class="icon-button" id="pickLocalDir" title="选择文件夹" type="button" aria-label="选择文件夹">
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M3 7h6l2 2h10v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z" />
+                <path d="M3 7V5a2 2 0 0 1 2-2h4l2 2h4" />
+              </svg>
+            </button>
+          </div>
+        </div>
+
+        <div class="field-group">
+          <label for="cacheDir">缓存目录</label>
+          <input id="cacheDir" name="cacheDir" spellcheck="false" placeholder="可选" />
+        </div>
+
+        <div class="field-group">
+          <label>下载源</label>
+          <input id="source" name="source" type="hidden" />
+          <div class="segmented source" data-field="source">
+            <button type="button" data-value="official">官方</button>
+            <button type="button" data-value="mirror">镜像</button>
+            <button type="button" data-value="custom">自定义</button>
+          </div>
+        </div>
+
+        <div class="field-group" id="endpointGroup">
+          <label for="endpoint">Endpoint</label>
+          <input id="endpoint" name="endpoint" spellcheck="false" />
+        </div>
+
+        <div class="two-col">
+          <div class="field-group">
+            <label for="revision">Revision</label>
+            <input id="revision" name="revision" spellcheck="false" placeholder="main" />
+          </div>
+          <div class="field-group">
+            <label for="token">Token</label>
+            <input id="token" name="token" type="password" spellcheck="false" placeholder="hf_..." />
+          </div>
+        </div>
+      </section>
+
+      <section class="right-pane" aria-label="任务">
+        <div class="toolbar">
+          <div class="stat">
+            <span id="runStateDot"></span>
+            <strong id="runState">就绪</strong>
+          </div>
+          <div class="toolbar-actions">
+            <button class="ghost-button" id="installCliButton" type="button">
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M12 3v12" />
+                <path d="m7 10 5 5 5-5" />
+                <path d="M5 21h14" />
+              </svg>
+              安装/更新
+            </button>
+            <button class="ghost-button" id="saveFavoriteButton" type="button">
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path d="m12 3 2.9 5.88 6.49.94-4.7 4.58 1.11 6.46L12 17.81l-5.8 3.05 1.11-6.46-4.7-4.58 6.49-.94Z" />
+              </svg>
+              收藏
+            </button>
+            <button class="ghost-button" id="copyCommandButton" type="button">
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <rect x="9" y="9" width="11" height="11" rx="2" />
+                <rect x="4" y="4" width="11" height="11" rx="2" />
+              </svg>
+              复制命令
+            </button>
+            <button class="ghost-button" id="openFolderButton" type="button">
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M3 7h6l2 2h10v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z" />
+              </svg>
+              打开目录
+            </button>
+          </div>
+        </div>
+
+        <div class="options-grid">
+          <label class="toggle">
+            <input id="dryRun" name="dryRun" type="checkbox" />
+            <span></span>
+            Dry run
+          </label>
+          <label class="toggle">
+            <input id="forceDownload" name="forceDownload" type="checkbox" />
+            <span></span>
+            强制重下
+          </label>
+          <label class="toggle">
+            <input id="highPerformance" name="highPerformance" type="checkbox" />
+            <span></span>
+            Xet 加速
+          </label>
+          <label class="toggle">
+            <input id="disableSymlinks" name="disableSymlinks" type="checkbox" />
+            <span></span>
+            禁用软链接
+          </label>
+          <label class="toggle">
+            <input id="quiet" name="quiet" type="checkbox" />
+            <span></span>
+            静默输出
+          </label>
+        </div>
+
+        <div class="numbers">
+          <label>
+            并发
+            <input id="maxWorkers" name="maxWorkers" type="number" min="1" max="64" step="1" />
+          </label>
+          <label>
+            下载超时
+            <input id="downloadTimeout" name="downloadTimeout" type="number" min="1" max="3600" step="1" />
+          </label>
+          <label>
+            元数据超时
+            <input id="etagTimeout" name="etagTimeout" type="number" min="1" max="3600" step="1" />
+          </label>
+        </div>
+
+        <div class="command-box">
+          <div class="command-head">
+            <span>命令预览</span>
+            <span id="endpointBadge">official</span>
+          </div>
+          <pre id="commandPreview"></pre>
+          <div id="warningBox" class="warning-box" hidden></div>
+        </div>
+
+        <section class="mini-panel queue-panel" aria-label="下载队列">
+          <div class="mini-head">
+            <span>下载队列</span>
+            <div class="mini-actions">
+              <button class="ghost-button small-button" id="startQueueButton" type="button">
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="M8 5v14l11-7Z" />
+                </svg>
+                开始队列
+              </button>
+              <button class="icon-button compact" id="stopQueueButton" title="停止队列" type="button" aria-label="停止队列">
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                  <rect x="7" y="7" width="10" height="10" rx="1" />
+                </svg>
+              </button>
+              <button class="icon-button compact" id="clearQueueButton" title="清空已完成" type="button" aria-label="清空已完成">
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="M4 7h16" />
+                  <path d="M10 11v6" />
+                  <path d="M14 11v6" />
+                  <path d="M6 7l1 14h10l1-14" />
+                  <path d="M9 7V4h6v3" />
+                </svg>
+              </button>
+            </div>
+          </div>
+          <div class="repo-list queue-list" id="queueList"></div>
+        </section>
+
+        <div class="library-grid">
+          <section class="mini-panel" aria-label="常用收藏">
+            <div class="mini-head">
+              <span>常用收藏</span>
+            </div>
+            <div class="repo-list" id="favoritesList"></div>
+          </section>
+
+          <section class="mini-panel" aria-label="任务历史">
+            <div class="mini-head">
+              <span>任务历史</span>
+              <button class="icon-button compact" id="clearHistoryButton" title="清空历史" type="button" aria-label="清空历史">
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="M4 7h16" />
+                  <path d="M10 11v6" />
+                  <path d="M14 11v6" />
+                  <path d="M6 7l1 14h10l1-14" />
+                  <path d="M9 7V4h6v3" />
+                </svg>
+              </button>
+            </div>
+            <div class="repo-list" id="historyList"></div>
+          </section>
+        </div>
+
+        <div class="log-shell">
+          <div class="log-head">
+            <span>实时输出</span>
+            <button class="icon-button compact" id="clearLogButton" title="清空输出" type="button" aria-label="清空输出">
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M4 7h16" />
+                <path d="M10 11v6" />
+                <path d="M14 11v6" />
+                <path d="M6 7l1 14h10l1-14" />
+                <path d="M9 7V4h6v3" />
+              </svg>
+            </button>
+          </div>
+          <pre id="logOutput"></pre>
+        </div>
+
+        <div class="runbar">
+          <button id="addQueueButton" class="secondary-button" type="button">
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M12 5v14" />
+              <path d="M5 12h14" />
+            </svg>
+            加入队列
+          </button>
+          <button id="startButton" class="primary-button" type="button">
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M8 5v14l11-7Z" />
+            </svg>
+            开始下载
+          </button>
+          <button id="stopButton" class="danger-button" type="button" disabled>
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <rect x="7" y="7" width="10" height="10" rx="1" />
+            </svg>
+            停止
+          </button>
+        </div>
+      </section>
+    </main>
+    <script src="./src/renderer.js"></script>
+  </body>
+</html>
