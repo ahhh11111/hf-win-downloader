@@ -25,68 +25,45 @@
               <h1>HF Downloader</h1>
               <span id="appVersion">v0.1.0</span>
             </div>
+            <p id="cliStatus">正在检测 CLI...</p>
           </div>
         </div>
 
-        <button class="status-pill" id="checkCliButton" title="检查环境" type="button" aria-label="检查环境">
-          <span id="runStateDot"></span>
-          <strong id="runState">已停止</strong>
-        </button>
-
-        <div class="header-actions">
-          <button class="tool-button" id="installCliButton" type="button">
+        <div class="window-controls" aria-label="窗口控制">
+          <button class="window-button" id="minimizeButton" title="最小化" type="button" aria-label="最小化">
             <svg viewBox="0 0 24 24" aria-hidden="true">
-              <path d="M12 3v12" />
-              <path d="m7 10 5 5 5-5" />
-              <path d="M5 21h14" />
+              <path d="M6 12h12" />
             </svg>
-            安装/更新
           </button>
-          <button class="tool-button" id="saveFavoriteButton" type="button">
+          <button class="window-button" id="maximizeButton" title="最大化" type="button" aria-label="最大化">
             <svg viewBox="0 0 24 24" aria-hidden="true">
-              <path d="m12 3 2.9 5.88 6.49.94-4.7 4.58 1.11 6.46L12 17.81l-5.8 3.05 1.11-6.46-4.7-4.58 6.49-.94Z" />
+              <rect x="7" y="7" width="10" height="10" rx="1" />
             </svg>
-            收藏
           </button>
-          <button class="tool-button" id="copyCommandButton" type="button">
+          <button class="window-button close" id="closeButton" title="关闭" type="button" aria-label="关闭">
             <svg viewBox="0 0 24 24" aria-hidden="true">
-              <rect x="9" y="9" width="11" height="11" rx="2" />
-              <rect x="4" y="4" width="11" height="11" rx="2" />
+              <path d="m7 7 10 10" />
+              <path d="m17 7-10 10" />
             </svg>
-            复制命令
           </button>
-          <button class="tool-button" id="openFolderButton" type="button">
-            <svg viewBox="0 0 24 24" aria-hidden="true">
-              <path d="M3 7h6l2 2h10v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z" />
-            </svg>
-            打开目录
-          </button>
-          <div class="window-controls" aria-label="窗口控制">
-            <button class="window-button" id="minimizeButton" title="最小化" type="button" aria-label="最小化">
-              <svg viewBox="0 0 24 24" aria-hidden="true">
-                <path d="M6 12h12" />
-              </svg>
-            </button>
-            <button class="window-button" id="maximizeButton" title="最大化" type="button" aria-label="最大化">
-              <svg viewBox="0 0 24 24" aria-hidden="true">
-                <rect x="7" y="7" width="10" height="10" rx="1" />
-              </svg>
-            </button>
-            <button class="window-button close" id="closeButton" title="关闭" type="button" aria-label="关闭">
-              <svg viewBox="0 0 24 24" aria-hidden="true">
-                <path d="m7 7 10 10" />
-                <path d="m17 7-10 10" />
-              </svg>
-            </button>
-          </div>
         </div>
       </header>
 
       <main class="app-main">
         <section class="config-panel" aria-label="下载配置">
-          <div class="panel-title">
-            <h2>下载配置</h2>
-            <p id="cliStatus">正在检测 CLI...</p>
+          <div class="panel-title config-title">
+            <div>
+              <h2>下载配置</h2>
+              <p class="panel-note">选择仓库后先预览文件，再决定下载范围。</p>
+            </div>
+            <button class="ghost-button small-ghost-button" id="installCliButton" type="button">
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M12 3v12" />
+                <path d="m7 10 5 5 5-5" />
+                <path d="M5 21h14" />
+              </svg>
+              安装/更新 CLI
+            </button>
           </div>
 
           <div class="field-group">
@@ -102,17 +79,6 @@
           <div class="field-group">
             <label for="repoId">仓库 ID</label>
             <input id="repoId" name="repoId" autocomplete="off" spellcheck="false" placeholder="Wan-AI/Wan2.2-Animate-14B" />
-          </div>
-
-          <div class="field-group">
-            <label for="files">指定文件（可选）</label>
-            <textarea
-              id="files"
-              name="files"
-              rows="5"
-              spellcheck="false"
-              placeholder="每行一个文件路径或 glob 模式&#10;&#10;例如：&#10;config.json&#10;model.safetensors"
-            ></textarea>
           </div>
 
           <div class="two-col">
@@ -161,6 +127,18 @@
               <button class="primary-button small-action" id="applySelectedFilesButton" type="button">使用已选文件</button>
             </div>
           </section>
+
+          <div class="field-group selected-files-group">
+            <label for="files">已选下载文件（可选）</label>
+            <textarea
+              id="files"
+              name="files"
+              rows="5"
+              spellcheck="false"
+              placeholder="这里会写入你在文件预览里勾选的路径，也可以手动逐行填写。"
+            ></textarea>
+            <p class="field-hint">留空且没有 Include / Exclude 时，会下载整个仓库。</p>
+          </div>
 
           <div class="field-group">
             <label for="localDir">保存到</label>
@@ -274,6 +252,12 @@
               <div class="favorites-panel">
                 <div class="mini-head">
                   <span>常用收藏</span>
+                  <button class="ghost-button tiny-ghost-button" id="saveFavoriteButton" type="button">
+                    <svg viewBox="0 0 24 24" aria-hidden="true">
+                      <path d="m12 3 2.9 5.88 6.49.94-4.7 4.58 1.11 6.46L12 17.81l-5.8 3.05 1.11-6.46-4.7-4.58 6.49-.94Z" />
+                    </svg>
+                    保存当前配置
+                  </button>
                 </div>
                 <div class="repo-list favorites-list" id="favoritesList"></div>
               </div>
@@ -284,6 +268,30 @@
         <div class="pane-resizer" id="paneResizer" role="separator" aria-label="调整下载配置宽度" aria-orientation="vertical"></div>
 
         <section class="workspace" aria-label="任务">
+          <section class="task-panel progress-panel" aria-label="下载进度">
+            <div class="panel-head progress-head">
+              <div class="progress-heading">
+                <h2>下载进度</h2>
+                <span class="progress-chip" id="runState">已停止</span>
+              </div>
+            </div>
+            <div class="progress-body">
+              <div class="progress-overview">
+                <div class="progress-primary">
+                  <strong id="progressTitle">等待开始</strong>
+                  <p id="progressSubtitle">先预览并选择文件，再开始下载。</p>
+                </div>
+                <div class="progress-metrics">
+                  <span id="progressCount">总大小待确认</span>
+                  <span id="progressPercent">0%</span>
+                </div>
+              </div>
+              <div class="progress-track" aria-hidden="true">
+                <div class="progress-fill" id="progressFill"></div>
+              </div>
+            </div>
+          </section>
+
           <section class="task-panel queue-panel" aria-label="下载队列">
             <div class="panel-head">
               <h2>下载队列</h2>

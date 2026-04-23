@@ -4,7 +4,7 @@ const crypto = require("node:crypto");
 const fs = require("node:fs/promises");
 const os = require("node:os");
 const path = require("node:path");
-const { buildDownloadPlan, DEFAULT_ENDPOINT, MIRROR_ENDPOINT, normalizeEndpoint } = require("./src/command");
+const { buildDownloadPlan, DEFAULT_ENDPOINT, MIRROR_ENDPOINT, normalizeEndpoint, splitFilenames } = require("./src/command");
 const {
   createFavoriteItem,
   createHistoryItem,
@@ -32,6 +32,158 @@ let activeHistoryId = "";
 let activeQueueId = "";
 let activeTerminationStatus = "";
 let queueState = normalizeQueue();
+const DOWNLOAD_RUNNER_PATH = path.join(__dirname, "src", "hf_download_runner.py");
+const STRUCTURED_EVENT_PREFIX = "__HF_EVENT__ ";
+
+function structuredPhaseText(phase) {
+  if (phase === "completed") {
+    return "下载已完成";
+  }
+  if (phase === "downloading") {
+    return "正在下载数据";
+  }
+  return "正在准备下载任务";
+}
+
+function createProgressTracker(kind, form, plan) {
+  const explicitFiles = splitFilenames(form.files);
+  const filteredFileCount = Number.isFinite(Number(form.filteredFileCount)) ? Number(form.filteredFileCount) : 0;
+  const previewTotalFiles = Number.isFinite(Number(form.previewTotalFiles)) ? Number(form.previewTotalFiles) : 0;
+  const hasScopedFilters = Boolean(cleanText(form.include) || cleanText(form.exclude));
+  const estimatedTotal =
+    explicitFiles.length ||
+    (hasScopedFilters ? filteredFileCount : Math.max(previewTotalFiles, filteredFileCount)) ||
+    0;
+
+  return {
+    kind,
+    state: "running",
+    repoId: cleanText(form.repoId),
+    endpoint: plan.endpoint,
+    totalFiles: estimatedTotal,
+    completedFiles: 0,
+    totalBytes: 0,
+    transferredBytes: 0,
+    percent: 0,
+    currentFile: explicitFiles.length === 1 ? explicitFiles[0] : "",
+    phase: explicitFiles.length ? "准备下载已选文件" : estimatedTotal ? "准备下载筛选结果" : "等待仓库返回文件清单"
+  };
+}
+
+function emitProgress(tracker) {
+  if (!tracker) {
+    return;
+  }
+
+  const totalFiles = Number(tracker.totalFiles) || 0;
+  const completedFiles = Math.max(0, Number(tracker.completedFiles) || 0);
+  const totalBytes = Math.max(0, Number(tracker.totalBytes) || 0);
+  const transferredBytes = Math.max(0, Number(tracker.transferredBytes) || 0);
+  let percent = Number.isFinite(Number(tracker.percent)) ? Number(tracker.percent) : 0;
+
+  if (!Number.isFinite(percent) || percent < 0) {
+    percent = 0;
+  }
+  if (totalBytes > 0) {
+    percent = Math.max(percent, Math.round((Math.min(transferredBytes, totalBytes) / totalBytes) * 100));
+  } else if (totalFiles > 0) {
+    percent = Math.max(percent, Math.round((Math.min(completedFiles, totalFiles) / totalFiles) * 100));
+  }
+  percent = Math.min(percent, 100);
+
+  emit("process:progress", {
+    ...tracker,
+    totalBytes,
+    transferredBytes: totalBytes > 0 ? Math.min(transferredBytes, totalBytes) : transferredBytes,
+    totalFiles,
+    completedFiles: totalFiles > 0 ? Math.min(completedFiles, totalFiles) : completedFiles,
+    percent
+  });
+}
+
+function updateProgressFromOutput(tracker, text) {
+  if (!tracker || tracker.kind !== "download") {
+    return false;
+  }
+
+  let changed = false;
+  const content = String(text ?? "");
+
+  const fetchingMatch = /Fetching\s+(\d+)\s+files?/i.exec(content);
+  if (fetchingMatch) {
+    const totalFiles = Number(fetchingMatch[1]) || 0;
+    if (totalFiles && tracker.totalFiles !== totalFiles) {
+      tracker.totalFiles = totalFiles;
+      tracker.phase = "正在拉取和校验仓库文件";
+      changed = true;
+    }
+  }
+
+  const fileProgressRegex = /(^|[\r\n])([^:\r\n]{1,220}):\s*(\d{1,3})%\|/g;
+  for (const match of content.matchAll(fileProgressRegex)) {
+    const currentFile = cleanText(match[2]);
+    const percent = Number(match[3]) || 0;
+
+    if (currentFile && !currentFile.toLowerCase().startsWith("fetching ")) {
+      tracker.currentFile = currentFile;
+    }
+    if (tracker.totalFiles <= 1 && percent > tracker.percent) {
+      tracker.percent = percent;
+    }
+    tracker.phase = "正在下载文件";
+    changed = true;
+  }
+
+  const aggregateProgressRegex = /(\d{1,3})%\|[^\r\n]*?\|\s*(\d+)\/(\d+)(?![0-9A-Za-z.])/g;
+  for (const match of content.matchAll(aggregateProgressRegex)) {
+    const percent = Number(match[1]) || 0;
+    const completedFiles = Number(match[2]) || 0;
+    const totalFiles = Number(match[3]) || 0;
+
+    if (totalFiles && tracker.totalFiles !== totalFiles) {
+      tracker.totalFiles = totalFiles;
+    }
+    if (completedFiles > tracker.completedFiles) {
+      tracker.completedFiles = completedFiles;
+    }
+    if (percent > tracker.percent) {
+      tracker.percent = percent;
+    }
+    tracker.phase = "正在下载文件";
+    changed = true;
+  }
+
+  const downloadingMatch = /Downloading\s+'([^']+)'/i.exec(content);
+  if (downloadingMatch && cleanText(downloadingMatch[1]) && tracker.currentFile !== cleanText(downloadingMatch[1])) {
+    tracker.currentFile = cleanText(downloadingMatch[1]);
+    tracker.phase = "正在下载文件";
+    changed = true;
+  }
+
+  return changed;
+}
+
+function applyStructuredProgressEvent(tracker, payload) {
+  if (!tracker || payload?.event !== "progress") {
+    return false;
+  }
+
+  if (Number.isFinite(Number(payload.total_bytes))) {
+    tracker.totalBytes = Math.max(0, Number(payload.total_bytes));
+  }
+  if (Number.isFinite(Number(payload.downloaded_bytes))) {
+    tracker.transferredBytes = Math.max(0, Number(payload.downloaded_bytes));
+  }
+  if (Number.isFinite(Number(payload.percent))) {
+    tracker.percent = Math.max(0, Number(payload.percent));
+  }
+  if (payload.phase) {
+    tracker.phase = structuredPhaseText(payload.phase);
+  }
+  tracker.state = payload.phase === "completed" ? "completed" : "running";
+  emitProgress(tracker);
+  return true;
+}
 
 function createWindow() {
   mainWindow = new BrowserWindow({
@@ -392,6 +544,29 @@ async function resolveCli() {
   return null;
 }
 
+async function resolveDownloadRuntime() {
+  const python = await detectPython();
+  if (python.pythonPath && python.hubVersion) {
+    return {
+      kind: "python",
+      path: python.pythonPath,
+      args: [DOWNLOAD_RUNNER_PATH],
+      python
+    };
+  }
+
+  const cli = await resolveCli();
+  if (cli) {
+    return {
+      kind: "cli",
+      path: cli.path,
+      args: null,
+      cli
+    };
+  }
+
+  return null;
+}
 async function getCommandVersion(cli) {
   if (!cli) {
     return "";
@@ -416,11 +591,20 @@ async function detectPython() {
     const version = await runCapture(py, ["--version"], { timeoutMs: 5000 });
     pythonVersion = (version.stdout || version.stderr).trim();
 
-    const hub = await runCapture(py, ["-m", "pip", "show", "huggingface_hub"], { timeoutMs: 8000 });
-    const versionLine = (hub.stdout || "")
-      .split(/\r?\n/)
-      .find((line) => line.toLowerCase().startsWith("version:"));
-    hubVersion = versionLine ? versionLine.replace(/^version:\s*/i, "").trim() : "";
+    const imported = await runCapture(
+      py,
+      ["-c", "import huggingface_hub,sys;sys.stdout.write(getattr(huggingface_hub,'__version__',''))"],
+      { timeoutMs: 8000 }
+    );
+    hubVersion = (imported.stdout || "").trim();
+
+    if (!hubVersion) {
+      const hub = await runCapture(py, ["-m", "pip", "show", "huggingface_hub"], { timeoutMs: 8000 });
+      const versionLine = (hub.stdout || "")
+        .split(/\r?\n/)
+        .find((line) => line.toLowerCase().startsWith("version:"));
+      hubVersion = versionLine ? versionLine.replace(/^version:\s*/i, "").trim() : "";
+    }
   }
 
   return { pythonPath: py, pipPath: pip, pythonVersion, hubVersion };
@@ -430,17 +614,59 @@ function spawnManaged(commandPath, args, env, kind, context = {}) {
   const child = spawn(commandPath, args, {
     shell: false,
     windowsHide: true,
-    env: { ...process.env, ...env }
+    env: { ...process.env, ...env },
+    stdio: ["pipe", "pipe", "pipe"]
   });
 
   activeProcess = child;
   activeKind = kind;
   activeContext = context;
+  let structuredStdoutBuffer = "";
+
+  if (context.stdinText) {
+    child.stdin?.end(context.stdinText);
+  } else {
+    child.stdin?.end();
+  }
+
+  const parseStructuredStdout = (text, flush = false) => {
+    structuredStdoutBuffer += text;
+    const parts = structuredStdoutBuffer.split(/\r?\n/);
+    if (!flush) {
+      structuredStdoutBuffer = parts.pop() ?? "";
+    } else {
+      structuredStdoutBuffer = "";
+    }
+
+    for (const line of parts) {
+      if (!line) {
+        continue;
+      }
+      if (line.startsWith(STRUCTURED_EVENT_PREFIX)) {
+        try {
+          const payload = JSON.parse(line.slice(STRUCTURED_EVENT_PREFIX.length));
+          applyStructuredProgressEvent(activeContext.progressTracker, payload);
+          continue;
+        } catch {
+          // Fall back to plain log output when the structured line is malformed.
+        }
+      }
+      emit("process:output", { stream: "stdout", text: `${line}\n` });
+    }
+  };
 
   const push = (stream, chunk) => {
+    const text = chunk.toString("utf8");
+    if (context.structuredProgress && stream === "stdout") {
+      parseStructuredStdout(text);
+      return;
+    }
+    if (!context.structuredProgress && updateProgressFromOutput(activeContext.progressTracker, text)) {
+      emitProgress(activeContext.progressTracker);
+    }
     emit("process:output", {
       stream,
-      text: chunk.toString("utf8")
+      text
     });
   };
 
@@ -458,6 +684,10 @@ function spawnManaged(commandPath, args, env, kind, context = {}) {
     const state = activeTerminationStatus || (code === 0 ? "completed" : "failed");
     const shouldEmitStatus = !queueId;
 
+    if (context.structuredProgress) {
+      parseStructuredStdout("", true);
+    }
+
     if (shouldEmitStatus) {
       emit("process:status", { state, code, kind });
     } else {
@@ -470,6 +700,21 @@ function spawnManaged(commandPath, args, env, kind, context = {}) {
     activeHistoryId = "";
     activeQueueId = "";
     activeTerminationStatus = "";
+
+    if (context.progressTracker) {
+      context.progressTracker.state = state;
+      context.progressTracker.phase =
+        state === "completed" ? "下载已完成" : state === "canceled" ? "任务已停止" : "下载失败";
+      if (state === "completed" && context.progressTracker.totalBytes > 0) {
+        context.progressTracker.transferredBytes = context.progressTracker.totalBytes;
+        context.progressTracker.percent = 100;
+      }
+      if (state === "completed" && context.progressTracker.totalFiles > 0) {
+        context.progressTracker.completedFiles = context.progressTracker.totalFiles;
+        context.progressTracker.percent = 100;
+      }
+      emitProgress(context.progressTracker);
+    }
 
     handleProcessClosed(kind, historyId, queueId, state, code).catch((error) => {
       emit("process:output", { stream: "stderr", text: `[任务] ${error.message}\n` });
@@ -665,19 +910,32 @@ ipcMain.handle("download:start", async (_event, form) => {
     throw new Error("已有任务在运行。");
   }
 
-  const cli = await resolveCli();
-  if (!cli) {
-    throw new Error("未找到 `hf` 或 `huggingface-cli`。请先安装或更新 Hugging Face CLI。");
+  const runtime = await resolveDownloadRuntime();
+  if (!runtime) {
+    throw new Error("No usable Python / huggingface_hub runtime or HF CLI was found.");
   }
 
+  const cli = runtime.cli ?? { name: "hf", path: "" };
   const plan = buildDownloadPlan(form, cli.name);
+  const progressTracker = createProgressTracker("download", form, plan);
   const { item } = await appendHistory(form, plan);
   activeHistoryId = item.id;
   emit("process:status", { state: "running", kind: "download", plan: { ...plan, displayCommand: plan.maskedCommand } });
-  spawnManaged(cli.path, plan.args, plan.env, "download", { historyId: item.id });
-  return { ...plan, cli, historyItem: item };
-});
+  emitProgress(progressTracker);
 
+  if (runtime.kind === "python") {
+    spawnManaged(runtime.path, runtime.args, { PYTHONUTF8: "1", PYTHONIOENCODING: "utf-8", NO_COLOR: "1" }, "download", {
+      historyId: item.id,
+      progressTracker,
+      structuredProgress: true,
+      stdinText: JSON.stringify({ form })
+    });
+  } else {
+    spawnManaged(cli.path, plan.args, plan.env, "download", { historyId: item.id, progressTracker });
+  }
+
+  return { ...plan, cli: runtime.cli ?? null, python: runtime.python ?? null, historyItem: item };
+});
 ipcMain.handle("process:stop", async () => {
   if (activeQueueId) {
     queueState = { ...queueState, running: false, paused: true };
@@ -700,14 +958,16 @@ async function startNextQueueItem() {
   }
 
   const startedAt = new Date().toISOString();
+  let runtime;
   let cli;
   let plan;
 
   try {
-    cli = await resolveCli();
-    if (!cli) {
-      throw new Error("未找到 `hf` 或 `huggingface-cli`。");
+    runtime = await resolveDownloadRuntime();
+    if (!runtime) {
+      throw new Error("No usable Python / huggingface_hub runtime or HF CLI was found.");
     }
+    cli = runtime.cli ?? { name: "hf", path: "" };
     plan = buildDownloadPlan(item.form, cli.name);
   } catch (error) {
     queueState = updateQueueItem(queueState, item.id, {
@@ -722,6 +982,7 @@ async function startNextQueueItem() {
   }
 
   const { item: historyItem } = await appendHistory(item.form, plan);
+  const progressTracker = createProgressTracker("download", item.form, plan);
   activeHistoryId = historyItem.id;
   activeQueueId = item.id;
   queueState = updateQueueItem(queueState, item.id, {
@@ -733,5 +994,21 @@ async function startNextQueueItem() {
   });
   await publishQueue(queueState);
   emit("process:output", { stream: "stdout", text: `[队列] 开始 ${item.repoId}\n[命令] ${plan.maskedCommand}\n\n` });
-  spawnManaged(cli.path, plan.args, plan.env, "download", { historyId: historyItem.id, queueId: item.id });
+  emitProgress(progressTracker);
+
+  if (runtime.kind === "python") {
+    spawnManaged(runtime.path, runtime.args, { PYTHONUTF8: "1", PYTHONIOENCODING: "utf-8", NO_COLOR: "1" }, "download", {
+      historyId: historyItem.id,
+      queueId: item.id,
+      progressTracker,
+      structuredProgress: true,
+      stdinText: JSON.stringify({ form: item.form })
+    });
+  } else {
+    spawnManaged(cli.path, plan.args, plan.env, "download", {
+      historyId: historyItem.id,
+      queueId: item.id,
+      progressTracker
+    });
+  }
 }

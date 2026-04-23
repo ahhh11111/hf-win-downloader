@@ -30,6 +30,9 @@ contextBridge.exposeInMainWorld("hfBridge", {
   onProcessOutput: (callback) => {
     ipcRenderer.on("process:output", (_event, payload) => callback(payload));
   },
+  onProcessProgress: (callback) => {
+    ipcRenderer.on("process:progress", (_event, payload) => callback(payload));
+  },
   onProcessStatus: (callback) => {
     ipcRenderer.on("process:status", (_event, payload) => callback(payload));
   },

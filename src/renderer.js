@@ -28,6 +28,18 @@ const state = {
   command: "",
   repoFiles: [],
   selectedFiles: new Set(),
+  progress: {
+    state: "idle",
+    repoId: "",
+    endpoint: "",
+    totalFiles: 0,
+    completedFiles: 0,
+    totalBytes: 0,
+    transferredBytes: 0,
+    percent: 0,
+    currentFile: "",
+    phase: "等待开始"
+  },
   previewTimer: 0,
   saveTimer: 0
 };
@@ -40,11 +52,8 @@ const els = {
   paneResizer: $("#paneResizer"),
   appVersion: $("#appVersion"),
   cliStatus: $("#cliStatus"),
-  checkCliButton: $("#checkCliButton"),
   installCliButton: $("#installCliButton"),
   saveFavoriteButton: $("#saveFavoriteButton"),
-  copyCommandButton: $("#copyCommandButton"),
-  openFolderButton: $("#openFolderButton"),
   addQueueButton: $("#addQueueButton"),
   startQueueButton: $("#startQueueButton"),
   stopQueueButton: $("#stopQueueButton"),
@@ -66,6 +75,11 @@ const els = {
   clearFileSelectionButton: $("#clearFileSelectionButton"),
   applySelectedFilesButton: $("#applySelectedFilesButton"),
   applyFilteredFilesButton: $("#applyFilteredFilesButton"),
+  progressTitle: $("#progressTitle"),
+  progressSubtitle: $("#progressSubtitle"),
+  progressCount: $("#progressCount"),
+  progressPercent: $("#progressPercent"),
+  progressFill: $("#progressFill"),
   logOutput: $("#logOutput"),
   runState: $("#runState"),
   endpointGroup: $("#endpointGroup"),
@@ -99,6 +113,15 @@ function readForm() {
     }
   }
   return form;
+}
+
+function buildRuntimeForm() {
+  return {
+    ...readForm(),
+    previewTotalFiles: state.repoFiles.length,
+    filteredFileCount: filteredRepoFiles({ ignoreSearch: true }).length,
+    selectedFileCount: state.selectedFiles.size
+  };
 }
 
 function writeForm(settings) {
@@ -212,6 +235,54 @@ function updateEndpointVisibility() {
   }
 }
 
+function updateProgressView(progress = state.progress) {
+  const total = Number(progress.totalBytes) || 0;
+  const completed = Number(progress.transferredBytes) || 0;
+  const percent = Number.isFinite(progress.percent) ? Math.max(0, Math.min(100, Math.round(progress.percent))) : 0;
+  const hasKnownTotal = total > 0;
+  const stateName = ["completed", "failed", "canceled", "running", "stopping"].includes(progress.state)
+    ? progress.state
+    : "idle";
+
+  els.runState.textContent =
+    progress.state === "completed"
+      ? "已完成"
+      : progress.state === "failed"
+        ? "失败"
+        : progress.state === "canceled"
+          ? "已停止"
+          : progress.state === "running"
+            ? "下载中"
+            : progress.state === "stopping"
+              ? "停止中"
+              : "已停止";
+
+  els.progressTitle.textContent = progress.repoId || "等待开始";
+  els.progressSubtitle.textContent = progress.phase || "先预览并选择文件，再开始下载。";
+  els.progressCount.textContent = hasKnownTotal ? `${Math.min(completed, total)} / ${total} 文件` : "文件数待确定";
+  els.progressPercent.textContent = `${percent}%`;
+  els.progressFill.style.width = `${percent}%`;
+  els.runState.dataset.state = stateName;
+  els.progressCurrentFile.textContent = progress.currentFile || (isRunning ? "批量下载处理中" : "-");
+  els.progressEndpoint.textContent = progress.endpoint || "-";
+}
+
+function resetProgress() {
+  state.progress = {
+    state: "idle",
+    repoId: "",
+    endpoint: "",
+    totalFiles: 0,
+    completedFiles: 0,
+    totalBytes: 0,
+    transferredBytes: 0,
+    percent: 0,
+    currentFile: "",
+    phase: "先预览并选择文件，再开始下载。"
+  };
+  updateProgressView();
+}
+
 function scheduleSaveAndPreview() {
   clearTimeout(state.saveTimer);
   clearTimeout(state.previewTimer);
@@ -225,7 +296,7 @@ function scheduleSaveAndPreview() {
 
 async function updatePreview() {
   try {
-    const plan = await window.hfBridge.previewDownload(readForm());
+    const plan = await window.hfBridge.previewDownload(buildRuntimeForm());
     state.command = plan.maskedCommand;
     els.commandPreview.textContent = plan.maskedCommand;
     els.endpointBadge.textContent = plan.endpoint;
@@ -283,8 +354,8 @@ function fileMatchesPattern(path, pattern) {
   return globToRegExp(pattern.replace(/\\/g, "/")).test(target);
 }
 
-function filteredRepoFiles() {
-  const query = String(els.fileSearch?.value ?? "").trim().toLowerCase();
+function filteredRepoFiles(options = {}) {
+  const query = options.ignoreSearch ? "" : String(els.fileSearch?.value ?? "").trim().toLowerCase();
   const include = splitPatternList(fieldElement("include").value);
   const exclude = splitPatternList(fieldElement("exclude").value);
 
@@ -320,6 +391,32 @@ function formatBytes(size) {
   const digits = current >= 10 || index === 0 ? 0 : 1;
   return `${current.toFixed(digits)} ${units[index]}`;
 }
+
+updateProgressView = function updateProgressViewBytes(progress = state.progress) {
+  const totalBytes = Number(progress.totalBytes) || 0;
+  const transferredBytes = Number(progress.transferredBytes) || 0;
+  const percent = Number.isFinite(progress.percent) ? Math.max(0, Math.min(100, Math.round(progress.percent))) : 0;
+  const stateName = ["completed", "failed", "canceled", "running", "stopping"].includes(progress.state)
+    ? progress.state
+    : "idle";
+  const labels = {
+    completed: "已完成",
+    failed: "失败",
+    canceled: "已停止",
+    running: "下载中",
+    stopping: "停止中",
+    idle: "已停止"
+  };
+
+  els.runState.textContent = labels[stateName] || labels.idle;
+  els.runState.dataset.state = stateName;
+  els.progressTitle.textContent = progress.repoId || "等待开始";
+  els.progressSubtitle.textContent = progress.phase || "先预览并选择文件，再开始下载。";
+  els.progressCount.textContent =
+    totalBytes > 0 ? `${formatBytes(Math.min(transferredBytes, totalBytes))} / ${formatBytes(totalBytes)}` : "总大小待确认";
+  els.progressPercent.textContent = `${percent}%`;
+  els.progressFill.style.width = `${percent}%`;
+};
 
 function syncSelectedFilesFromTextarea() {
   state.selectedFiles = new Set(splitSelectedFiles(fieldElement("files").value));
@@ -408,7 +505,7 @@ async function loadRepoFiles() {
   els.loadFilesButton.disabled = true;
 
   try {
-    const result = await window.hfBridge.listRepoFiles(readForm());
+    const result = await window.hfBridge.listRepoFiles(buildRuntimeForm());
     state.repoFiles = result.files || [];
     els.filePreviewStatus.textContent = `${result.endpoint} · ${result.revision}`;
     appendLog(`[预览] 已加载 ${result.total} 个文件。\n`);
@@ -631,7 +728,7 @@ function findQueueItem(id) {
 
 async function saveFavorite() {
   try {
-    const result = await window.hfBridge.addFavorite(readForm());
+    const result = await window.hfBridge.addFavorite(buildRuntimeForm());
     state.library = result.library;
     renderLibrary();
     appendLog(`[收藏] 已保存 ${result.item.repoId}。\n`);
@@ -647,9 +744,9 @@ async function removeFavorite(id) {
 
 async function addQueueItem() {
   try {
-    state.queue = await window.hfBridge.addQueueItem(readForm());
+    state.queue = await window.hfBridge.addQueueItem(buildRuntimeForm());
     renderQueue();
-    appendLog(`[队列] 已加入 ${readForm().repoId}。\n`);
+    appendLog(`[队列] 已加入 ${fieldElement("repoId").value}。\n`);
   } catch (error) {
     appendLog(`[队列] ${error.message}\n`, "stderr");
   }
@@ -690,7 +787,6 @@ async function clearQueue() {
 
 function setRunning(running, label = running ? "运行中" : "已停止", failed = false) {
   state.running = running;
-  els.runState.textContent = label;
   document.body.classList.toggle("busy", running);
   document.body.classList.toggle("failed", failed);
   els.startButton.disabled = running;
@@ -718,7 +814,7 @@ async function checkCli() {
 async function startDownload() {
   els.logOutput.textContent = "";
   try {
-    const plan = await window.hfBridge.startDownload(readForm());
+    const plan = await window.hfBridge.startDownload(buildRuntimeForm());
     appendLog(`[命令] ${plan.maskedCommand}\n[源] ${plan.endpoint}\n\n`);
     if (plan.historyItem) {
       await loadLibrary();
@@ -786,7 +882,6 @@ function bindEvents() {
     }
   });
 
-  els.checkCliButton.addEventListener("click", checkCli);
   els.installCliButton.addEventListener("click", installCli);
   els.saveFavoriteButton.addEventListener("click", saveFavorite);
   els.addQueueButton.addEventListener("click", addQueueItem);
@@ -842,18 +937,6 @@ function bindEvents() {
   els.maximizeButton?.addEventListener("click", () => window.hfBridge.toggleMaximizeWindow?.());
   els.closeButton?.addEventListener("click", () => window.hfBridge.closeWindow?.());
 
-  els.copyCommandButton.addEventListener("click", async () => {
-    await window.hfBridge.writeClipboard(state.command || els.commandPreview.textContent);
-    appendLog("[剪贴板] 已复制命令预览。\n");
-  });
-
-  els.openFolderButton.addEventListener("click", async () => {
-    const result = await window.hfBridge.openPath(fieldElement("localDir").value);
-    if (result) {
-      appendLog(`[目录] ${result}\n`, "stderr");
-    }
-  });
-
   els.favoritesList.addEventListener("click", async (event) => {
     const target = event.target.closest("[data-action]");
     if (!target) {
@@ -884,6 +967,10 @@ function bindEvents() {
     }
   });
 
+  window.hfBridge.onProcessProgress?.((payload) => {
+    state.progress = { ...state.progress, ...payload };
+    updateProgressView();
+  });
   window.hfBridge.onProcessOutput(({ stream, text }) => appendLog(text, stream));
   window.hfBridge.onProcessStatus((payload) => {
     if (payload.state === "item-completed") {
@@ -891,14 +978,38 @@ function bindEvents() {
     }
     if (payload.state === "running") {
       setRunning(true, payload.kind === "install" ? "安装中" : payload.kind === "queue" ? "队列中" : "下载中");
+      if (payload.kind === "install") {
+        state.progress = {
+          ...state.progress,
+          state: "running",
+          repoId: "huggingface_hub",
+          endpoint: "-",
+          totalFiles: 0,
+          completedFiles: 0,
+          percent: 0,
+          currentFile: "",
+          phase: "正在安装或更新 Hugging Face CLI"
+        };
+        updateProgressView();
+      }
       return;
     }
     if (payload.state === "stopping") {
       setRunning(true, "停止中");
+      state.progress = { ...state.progress, state: "stopping", phase: "正在停止任务" };
+      updateProgressView();
       return;
     }
     if (payload.state === "completed") {
       setRunning(false, payload.kind === "install" ? "安装完成" : payload.kind === "queue" ? "队列完成" : "完成");
+      state.progress = {
+        ...state.progress,
+        state: "completed",
+        phase: payload.kind === "install" ? "环境已更新完成" : payload.kind === "queue" ? "队列已处理完成" : "下载已完成",
+        percent: 100,
+        completedFiles: Math.max(state.progress.completedFiles || 0, state.progress.totalFiles || 0)
+      };
+      updateProgressView();
       if (payload.kind === "install") {
         checkCli();
       }
@@ -906,9 +1017,13 @@ function bindEvents() {
     }
     if (payload.state === "canceled") {
       setRunning(false, "已停止");
+      state.progress = { ...state.progress, state: "canceled", phase: "任务已停止" };
+      updateProgressView();
       return;
     }
     setRunning(false, `失败 ${payload.code ?? ""}`.trim(), true);
+    state.progress = { ...state.progress, state: "failed", phase: `任务失败${payload.code !== undefined ? `（${payload.code}）` : ""}` };
+    updateProgressView();
   });
   window.hfBridge.onLibraryChanged((library) => {
     state.library = library;
@@ -926,6 +1041,7 @@ function bindEvents() {
 async function init() {
   bindEvents();
   initPaneResize();
+  resetProgress();
   if (els.appVersion && window.hfBridge.getAppVersion) {
     try {
       els.appVersion.textContent = `v${await window.hfBridge.getAppVersion()}`;

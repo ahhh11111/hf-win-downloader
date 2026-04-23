@@ -87,7 +87,7 @@ summary {
 
 .app-window {
   display: grid;
-  grid-template-rows: 76px minmax(0, 1fr) 84px;
+  grid-template-rows: 72px minmax(0, 1fr) 84px;
   width: 100%;
   height: 100vh;
   min-width: 0;
@@ -98,11 +98,11 @@ summary {
 .app-header {
   -webkit-app-region: drag;
   display: grid;
-  grid-template-columns: minmax(260px, 1fr) auto minmax(460px, 1fr);
+  grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
-  gap: 18px;
+  gap: 16px;
   min-width: 0;
-  padding: 0 26px;
+  padding: 0 22px;
   background: rgba(255, 255, 255, 0.88);
   border-bottom: 1px solid var(--line);
 }
@@ -149,6 +149,11 @@ summary {
   min-width: 0;
 }
 
+.brand-copy {
+  display: grid;
+  gap: 4px;
+}
+
 .brand-line {
   display: flex;
   align-items: baseline;
@@ -173,50 +178,10 @@ h1 {
   font-weight: 650;
 }
 
-.status-pill {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 9px;
-  min-width: 96px;
-  height: 38px;
-  padding: 0 18px;
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  background: var(--surface);
-  color: #374151;
-}
-
-#runStateDot {
-  width: 10px;
-  height: 10px;
-  border-radius: 50%;
-  background: #95a0ad;
-  box-shadow: 0 0 0 4px rgba(149, 160, 173, 0.14);
-}
-
-.busy #runStateDot {
-  background: var(--violet);
-  box-shadow: 0 0 0 4px rgba(109, 91, 208, 0.16);
-}
-
-.failed #runStateDot {
-  background: var(--danger);
-  box-shadow: 0 0 0 4px rgba(216, 75, 75, 0.16);
-}
-
-.header-actions {
-  display: flex;
-  justify-content: flex-end;
-  align-items: center;
-  gap: 10px;
-  min-width: 0;
-}
-
 .window-controls {
   display: flex;
   align-items: center;
-  margin-left: 8px;
+  margin-left: auto;
 }
 
 .tool-button,
@@ -374,6 +339,31 @@ h1 {
   align-items: flex-start;
 }
 
+.config-title > div {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+}
+
+.panel-note,
+.field-hint {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.small-ghost-button {
+  min-height: 36px;
+  padding: 0 12px;
+  font-size: 13px;
+}
+
+.tiny-ghost-button {
+  min-height: 30px;
+  padding: 0 10px;
+  font-size: 12px;
+}
+
 h2 {
   color: #151c2b;
   font-size: 18px;
@@ -390,12 +380,11 @@ h3 {
 }
 
 #cliStatus {
-  max-width: 260px;
-  overflow: hidden;
+  max-width: min(100%, 520px);
   color: var(--muted);
   font-size: 12px;
   line-height: 1.4;
-  text-align: right;
+  text-align: left;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -860,7 +849,7 @@ input:disabled {
 
 .workspace {
   display: grid;
-  grid-template-rows: minmax(260px, 0.95fr) minmax(300px, 1.05fr);
+  grid-template-rows: minmax(168px, auto) minmax(220px, 0.85fr) minmax(300px, 1.15fr);
   gap: 18px;
   min-width: 0;
   min-height: 0;
@@ -870,6 +859,12 @@ input:disabled {
   display: grid;
   grid-template-rows: 64px minmax(0, 1fr);
   overflow: hidden;
+}
+
+.progress-panel {
+  grid-template-rows: auto;
+  gap: 16px;
+  padding: 20px;
 }
 
 .panel-head {
@@ -886,6 +881,160 @@ input:disabled {
   justify-content: flex-end;
   gap: 10px;
   min-width: 0;
+  flex-wrap: wrap;
+}
+
+.progress-head {
+  min-height: auto;
+  padding: 0;
+  border-bottom: 0;
+  background: transparent;
+}
+
+.progress-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  width: 100%;
+}
+
+.progress-chip {
+  display: inline-flex;
+  align-items: center;
+  min-height: 32px;
+  padding: 0 12px;
+  border-radius: 999px;
+  background: #e8edf3;
+  color: #526070;
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.progress-chip[data-state="running"] {
+  color: #ffffff;
+  background: var(--accent);
+}
+
+.progress-chip[data-state="stopping"] {
+  color: #6b4d14;
+  background: #fff0c6;
+}
+
+.progress-chip[data-state="completed"] {
+  color: #1e5b4d;
+  background: #daf3ea;
+}
+
+.progress-chip[data-state="failed"],
+.progress-chip[data-state="canceled"] {
+  color: #8c2e2e;
+  background: #ffe0e0;
+}
+
+.progress-body {
+  display: grid;
+  gap: 14px;
+  min-width: 0;
+}
+
+.progress-overview {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 18px;
+}
+
+.progress-primary {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+
+.progress-primary strong {
+  overflow: hidden;
+  color: #162030;
+  font-size: 18px;
+  font-weight: 800;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.progress-primary p {
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.progress-metrics {
+  display: grid;
+  gap: 4px;
+  flex: 0 0 auto;
+  justify-items: end;
+}
+
+.progress-metrics span:first-child {
+  color: #2d3748;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.progress-metrics span:last-child {
+  color: var(--accent);
+  font-size: 26px;
+  line-height: 1;
+  font-weight: 800;
+}
+
+.progress-track {
+  height: 10px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: #ebeff4;
+}
+
+.progress-fill {
+  width: 0;
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, #20b481 0%, #12845f 100%);
+  transition: width 0.18s ease;
+}
+
+.progress-details {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.progress-detail {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-soft);
+}
+
+.progress-detail label {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.progress-detail span {
+  min-width: 0;
+  overflow: hidden;
+  color: #1f2937;
+  font-size: 13px;
+  font-weight: 650;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+#progressCurrentFile {
+  font-family: "Cascadia Mono", "Consolas", monospace;
 }
 
 .repo-list {
@@ -1145,22 +1294,24 @@ input:disabled {
   grid-template-rows: minmax(0, 1fr);
 }
 
+.log-expanded .progress-panel,
 .log-expanded .queue-panel {
   display: none;
 }
 
-@media (max-width: 1180px) {
+@media (max-width: 1320px) {
   .app-header {
-    grid-template-columns: minmax(220px, 1fr) auto minmax(340px, 1fr);
     padding: 0 18px;
   }
 
-  .tool-button {
-    padding: 0 10px;
+  .app-main {
+    padding: 18px 20px 16px;
   }
+}
 
-  .tool-button svg {
-    display: none;
+@media (max-width: 1180px) {
+  .app-header {
+    padding: 14px 18px;
   }
 
   .app-main {
@@ -1182,23 +1333,9 @@ input:disabled {
 
   .app-header {
     -webkit-app-region: no-drag;
-    grid-template-columns: 1fr;
-    gap: 12px;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 10px;
     padding: 16px;
-  }
-
-  .status-pill,
-  .header-actions {
-    justify-self: stretch;
-  }
-
-  .header-actions {
-    flex-wrap: wrap;
-    justify-content: flex-start;
-  }
-
-  .tool-button {
-    flex: 1 1 132px;
   }
 
   .window-controls {
@@ -1207,6 +1344,7 @@ input:disabled {
 
   .app-main {
     grid-template-columns: 1fr;
+    row-gap: 16px;
     overflow: visible;
   }
 
@@ -1220,7 +1358,7 @@ input:disabled {
   }
 
   .workspace {
-    grid-template-rows: minmax(220px, auto) minmax(280px, 440px);
+    grid-template-rows: repeat(3, minmax(0, auto));
   }
 }
 
@@ -1251,18 +1389,9 @@ input:disabled {
     width: 100%;
   }
 
-  .header-actions {
-    align-items: stretch;
-  }
-
-  .header-actions .tool-button {
-    flex: 1 1 calc(50% - 8px);
-  }
-
   .window-controls {
     justify-content: flex-end;
-    width: 100%;
-    margin-left: 0;
+    width: auto;
   }
 
   .runbar {
@@ -1278,21 +1407,33 @@ input:disabled {
     width: 100%;
   }
 
-  .panel-head {
+  .panel-head,
+  .progress-overview {
     align-items: flex-start;
     flex-direction: column;
-    height: auto;
-    padding: 14px;
   }
 
-  .panel-actions {
-    flex-wrap: wrap;
-    justify-content: flex-start;
+  .progress-metrics {
+    width: 100%;
+    grid-template-columns: 1fr auto;
+    align-items: end;
+    justify-items: stretch;
+  }
+
+  .progress-metrics span:last-child {
+    justify-self: end;
+  }
+
+  .panel-head {
+    height: auto;
+    padding: 14px;
   }
 }
 
 @media (max-width: 560px) {
   .app-header {
+    grid-template-columns: 1fr;
+    gap: 10px;
     padding: 14px;
   }
 
@@ -1302,12 +1443,12 @@ input:disabled {
     gap: 4px;
   }
 
-  .header-actions .tool-button {
-    flex-basis: 100%;
+  .brand-copy {
+    gap: 6px;
   }
 
-  .status-pill {
-    width: 100%;
+  #cliStatus {
+    white-space: normal;
   }
 
   .app-main {
@@ -1327,6 +1468,10 @@ input:disabled {
     align-items: flex-start;
     flex-direction: column;
     gap: 4px;
+  }
+
+  .progress-details {
+    grid-template-columns: 1fr;
   }
 
   .path-row,
