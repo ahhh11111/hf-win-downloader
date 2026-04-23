@@ -4,7 +4,7 @@ const crypto = require("node:crypto");
 const fs = require("node:fs/promises");
 const os = require("node:os");
 const path = require("node:path");
-const { buildDownloadPlan, MIRROR_ENDPOINT } = require("./src/command");
+const { buildDownloadPlan, DEFAULT_ENDPOINT, MIRROR_ENDPOINT, normalizeEndpoint } = require("./src/command");
 const {
   createFavoriteItem,
   createHistoryItem,
@@ -37,11 +37,12 @@ function createWindow() {
   mainWindow = new BrowserWindow({
     width: 1180,
     height: 920,
-    minWidth: 980,
-    minHeight: 780,
+    minWidth: 640,
+    minHeight: 640,
     title: "HF Downloader",
-    backgroundColor: "#f7f8fb",
+    backgroundColor: "#f5f7fa",
     autoHideMenuBar: true,
+    frame: false,
     icon: path.join(__dirname, "build", "icon.ico"),
     webPreferences: {
       preload: path.join(__dirname, "preload.js"),
@@ -86,6 +87,10 @@ function randomId(prefix) {
   return `${prefix}-${Date.now()}-${crypto.randomBytes(4).toString("hex")}`;
 }
 
+function cleanText(value) {
+  return String(value ?? "").trim();
+}
+
 function defaultSettings() {
   return {
     repoType: "model",
@@ -93,7 +98,7 @@ function defaultSettings() {
     files: "",
     localDir: path.join(os.homedir(), "Downloads", "huggingface", "gpt2"),
     cacheDir: "",
-    source: "official",
+    source: "mirror",
     endpoint: MIRROR_ENDPOINT,
     revision: "",
     include: "",
@@ -235,6 +240,130 @@ function runCapture(command, args = [], options = {}) {
       resolve({ ok: code === 0, stdout, stderr, code });
     });
   });
+}
+
+function repoApiKind(repoType) {
+  if (repoType === "dataset") {
+    return "datasets";
+  }
+  if (repoType === "space") {
+    return "spaces";
+  }
+  return "models";
+}
+
+function repoTreeUrl(form, nextUrl = "") {
+  if (nextUrl) {
+    return nextUrl;
+  }
+
+  const endpoint = (normalizeEndpoint(form) || DEFAULT_ENDPOINT).replace(/\/+$/, "");
+  const repoId = cleanText(form.repoId);
+  const revision = encodeURIComponent(cleanText(form.revision) || "main");
+  const repoPath = repoId
+    .split("/")
+    .map((part) => encodeURIComponent(part))
+    .join("/");
+  return `${endpoint}/api/${repoApiKind(cleanText(form.repoType))}/${repoPath}/tree/${revision}?recursive=1`;
+}
+
+function parseNextLink(linkHeader) {
+  if (!linkHeader) {
+    return "";
+  }
+
+  for (const part of linkHeader.split(",")) {
+    const match = /<([^>]+)>;\s*rel="next"/.exec(part.trim());
+    if (match) {
+      return match[1];
+    }
+  }
+  return "";
+}
+
+async function fetchJson(url, form) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 30000);
+  const token = cleanText(form.token);
+  const headers = { Accept: "application/json" };
+
+  if (token) {
+    headers.Authorization = `Bearer ${token}`;
+  }
+
+  try {
+    const response = await fetch(url, { headers, signal: controller.signal });
+    const text = await response.text();
+
+    if (!response.ok) {
+      let message = text;
+      try {
+        const errorPayload = JSON.parse(text);
+        message = errorPayload.error || errorPayload.message || message;
+      } catch {
+        // Keep the raw server response if it is not JSON.
+      }
+      throw new Error(message || `HTTP ${response.status}`);
+    }
+
+    return {
+      data: text ? JSON.parse(text) : [],
+      next: parseNextLink(response.headers.get("link"))
+    };
+  } catch (error) {
+    if (error.name === "AbortError") {
+      throw new Error("文件列表请求超时。");
+    }
+    throw error;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+async function listRepoFiles(form) {
+  const repoId = cleanText(form.repoId);
+  const repoType = cleanText(form.repoType) || "model";
+
+  if (!repoId) {
+    throw new Error("请输入仓库 ID 后再预览文件。");
+  }
+  if (!["model", "dataset", "space"].includes(repoType)) {
+    throw new Error("仓库类型只能是 model、dataset 或 space。");
+  }
+
+  let url = repoTreeUrl(form);
+  const files = [];
+  let pages = 0;
+
+  while (url) {
+    pages += 1;
+    if (pages > 20) {
+      throw new Error("文件列表过大，已停止继续拉取。");
+    }
+
+    const result = await fetchJson(url, form);
+    const entries = Array.isArray(result.data) ? result.data : [];
+    for (const entry of entries) {
+      if (entry?.type !== "file" || !entry.path) {
+        continue;
+      }
+      files.push({
+        path: String(entry.path),
+        size: Number(entry.size ?? entry.lfs?.size ?? 0) || 0,
+        lfs: Boolean(entry.lfs),
+        oid: entry.oid || ""
+      });
+    }
+    url = result.next;
+  }
+
+  files.sort((left, right) => left.path.localeCompare(right.path, "en"));
+  return {
+    endpoint: normalizeEndpoint(form) || DEFAULT_ENDPOINT,
+    revision: cleanText(form.revision) || "main",
+    total: files.length,
+    files
+  };
 }
 
 async function whereCommand(command) {
@@ -479,11 +608,37 @@ ipcMain.handle("clipboard:writeText", (_event, text) => {
   return true;
 });
 
+ipcMain.handle("app:version", () => app.getVersion());
+
+ipcMain.handle("window:minimize", () => {
+  mainWindow?.minimize();
+  return true;
+});
+
+ipcMain.handle("window:toggleMaximize", () => {
+  if (!mainWindow) {
+    return false;
+  }
+  if (mainWindow.isMaximized()) {
+    mainWindow.unmaximize();
+  } else {
+    mainWindow.maximize();
+  }
+  return mainWindow.isMaximized();
+});
+
+ipcMain.handle("window:close", () => {
+  mainWindow?.close();
+  return true;
+});
+
 ipcMain.handle("download:preview", async (_event, form) => {
   const cli = await resolveCli();
   const plan = buildDownloadPlan(form, cli?.name ?? "hf");
   return { ...plan, cli };
 });
+
+ipcMain.handle("repo:listFiles", async (_event, form) => listRepoFiles(form));
 
 ipcMain.handle("cli:status", async () => {
   const cli = await resolveCli();
