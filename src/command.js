@@ -45,6 +45,8 @@ function buildDownloadPlan(form, cliName = "hf") {
 
   const args = ["download", repoId];
   const files = splitFilenames(form.files);
+  const includePatterns = splitList(form.include);
+  const excludePatterns = splitList(form.exclude);
   args.push(...files);
 
   if (repoType !== "model") {
@@ -56,11 +58,11 @@ function buildDownloadPlan(form, cliName = "hf") {
     args.push("--revision", revision);
   }
 
-  for (const pattern of splitList(form.include)) {
+  for (const pattern of includePatterns) {
     args.push("--include", pattern);
   }
 
-  for (const pattern of splitList(form.exclude)) {
+  for (const pattern of excludePatterns) {
     args.push("--exclude", pattern);
   }
 
@@ -135,6 +137,14 @@ function buildDownloadPlan(form, cliName = "hf") {
 
   if (cleanText(form.legacyFlags)) {
     warnings.push("已忽略旧参数：新版 `hf download` 不再需要 `--resume-download` 或 `--local-dir-use-symlinks`。");
+  }
+
+  if (!files.length && !includePatterns.length && !excludePatterns.length) {
+    warnings.push("当前没有指定文件或筛选条件，开始下载会拉取整个仓库。建议先用“文件预览”勾选需要的文件。");
+  }
+
+  if (files.length && (includePatterns.length || excludePatterns.length)) {
+    warnings.push("已指定具体文件，同时 Include/Exclude 仍会参与过滤；如果文件没有被下载，请检查筛选条件是否排除了它。");
   }
 
   return {
