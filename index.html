@@ -83,11 +83,11 @@
 
           <div class="two-col">
             <div class="field-group">
-              <label for="include">Include（可选）</label>
+              <label for="include">包含（可选）</label>
               <input id="include" name="include" spellcheck="false" placeholder="*.safetensors" />
             </div>
             <div class="field-group">
-              <label for="exclude">Exclude（可选）</label>
+              <label for="exclude">排除（可选）</label>
               <input id="exclude" name="exclude" spellcheck="false" placeholder="*.bin" />
             </div>
           </div>
@@ -122,23 +122,9 @@
               <div class="file-empty">点击“预览文件”拉取仓库文件列表</div>
             </div>
 
-            <div class="file-actions">
-              <button class="secondary-button small-action" id="applyFilteredFilesButton" type="button">使用筛选结果</button>
-              <button class="primary-button small-action" id="applySelectedFilesButton" type="button">使用已选文件</button>
-            </div>
           </section>
 
-          <div class="field-group selected-files-group">
-            <label for="files">已选下载文件（可选）</label>
-            <textarea
-              id="files"
-              name="files"
-              rows="5"
-              spellcheck="false"
-              placeholder="这里会写入你在文件预览里勾选的路径，也可以手动逐行填写。"
-            ></textarea>
-            <p class="field-hint">留空且没有 Include / Exclude 时，会下载整个仓库。</p>
-          </div>
+          <input id="files" name="files" type="hidden" />
 
           <div class="field-group">
             <label for="localDir">保存到</label>
@@ -157,7 +143,7 @@
             <label for="source">镜像源 / Endpoint</label>
             <div class="source-row">
               <select id="source" name="source">
-                <option value="mirror">官方镜像（推荐）</option>
+                <option value="mirror">国内镜像（推荐）</option>
                 <option value="official">Hugging Face 官方</option>
                 <option value="custom">自定义 Endpoint</option>
               </select>
@@ -249,6 +235,34 @@
                 <div id="warningBox" class="warning-box" hidden></div>
               </div>
 
+              <div class="log-tools">
+                <div class="mini-head">
+                  <span>日志文件</span>
+                  <span id="logStatus">运行记录会保存到本地日志文件。</span>
+                </div>
+                <div class="log-actions">
+                  <button class="ghost-button tiny-ghost-button" id="openLogButton" type="button">
+                    <svg viewBox="0 0 24 24" aria-hidden="true">
+                      <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Z" />
+                      <path d="M14 2v6h6" />
+                      <path d="M9 15h6" />
+                      <path d="M9 18h6" />
+                    </svg>
+                    打开日志
+                  </button>
+                  <button class="ghost-button tiny-ghost-button" id="clearLogButton" type="button">
+                    <svg viewBox="0 0 24 24" aria-hidden="true">
+                      <path d="M4 7h16" />
+                      <path d="M10 11v6" />
+                      <path d="M14 11v6" />
+                      <path d="M6 7l1 14h10l1-14" />
+                      <path d="M9 7V4h6v3" />
+                    </svg>
+                    清空日志
+                  </button>
+                </div>
+              </div>
+
               <div class="favorites-panel">
                 <div class="mini-head">
                   <span>常用收藏</span>
@@ -283,6 +297,7 @@
                 </div>
                 <div class="progress-metrics">
                   <span id="progressCount">总大小待确认</span>
+                  <span class="progress-speed" id="progressSpeed">-</span>
                   <span id="progressPercent">0%</span>
                 </div>
               </div>
@@ -296,6 +311,13 @@
             <div class="panel-head">
               <h2>下载队列</h2>
               <div class="panel-actions">
+                <button class="ghost-button" id="openDownloadDirButton" type="button">
+                  <svg viewBox="0 0 24 24" aria-hidden="true">
+                    <path d="M3 7h6l2 2h10v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z" />
+                    <path d="M3 7V5a2 2 0 0 1 2-2h4l2 2h4" />
+                  </svg>
+                  打开目录
+                </button>
                 <button class="ghost-button" id="clearQueueButton" type="button">
                   <svg viewBox="0 0 24 24" aria-hidden="true">
                     <path d="M4 7h16" />
@@ -322,37 +344,6 @@
             <div class="repo-list queue-list" id="queueList"></div>
           </section>
 
-          <section class="task-panel log-panel" aria-label="实时输出">
-            <div class="panel-head log-head">
-              <h2>实时输出</h2>
-              <div class="panel-actions">
-                <label class="auto-scroll">
-                  自动滚动
-                  <input id="autoScroll" type="checkbox" checked />
-                  <span></span>
-                </label>
-                <button class="ghost-button" id="clearLogButton" type="button">
-                  <svg viewBox="0 0 24 24" aria-hidden="true">
-                    <path d="M4 7h16" />
-                    <path d="M10 11v6" />
-                    <path d="M14 11v6" />
-                    <path d="M6 7l1 14h10l1-14" />
-                    <path d="M9 7V4h6v3" />
-                  </svg>
-                  清空
-                </button>
-                <button class="icon-button compact" id="logExpandButton" title="展开输出" type="button" aria-label="展开输出">
-                  <svg viewBox="0 0 24 24" aria-hidden="true">
-                    <path d="M8 3H3v5" />
-                    <path d="M16 3h5v5" />
-                    <path d="M8 21H3v-5" />
-                    <path d="M16 21h5v-5" />
-                  </svg>
-                </button>
-              </div>
-            </div>
-            <pre id="logOutput"></pre>
-          </section>
         </section>
       </main>
 

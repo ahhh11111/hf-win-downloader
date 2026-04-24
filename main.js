@@ -1,10 +1,11 @@
 const { app, BrowserWindow, ipcMain, dialog, shell, clipboard } = require("electron");
 const { spawn } = require("node:child_process");
 const crypto = require("node:crypto");
+const fsSync = require("node:fs");
 const fs = require("node:fs/promises");
 const os = require("node:os");
 const path = require("node:path");
-const { buildDownloadPlan, DEFAULT_ENDPOINT, MIRROR_ENDPOINT, normalizeEndpoint, splitFilenames } = require("./src/command");
+const { buildDownloadPlan, DEFAULT_ENDPOINT, MIRROR_ENDPOINT, normalizeEndpoint, splitFilenames, splitList } = require("./src/command");
 const {
   createFavoriteItem,
   createHistoryItem,
@@ -32,8 +33,14 @@ let activeHistoryId = "";
 let activeQueueId = "";
 let activeTerminationStatus = "";
 let queueState = normalizeQueue();
-const DOWNLOAD_RUNNER_PATH = path.join(__dirname, "src", "hf_download_runner.py");
 const STRUCTURED_EVENT_PREFIX = "__HF_EVENT__ ";
+const DOWNLOAD_RUNNER_FILENAME = "hf_download_runner.py";
+const PROXY_ENV_KEYS = ["HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy"];
+const NO_PROXY_ENV_KEYS = ["NO_PROXY", "no_proxy"];
+const LOG_FILE_NAME = "hf-downloader.log";
+const MAX_LOG_BYTES = 2 * 1024 * 1024;
+const MAX_LOG_FILES = 4;
+let logWriteChain = Promise.resolve();
 
 function structuredPhaseText(phase) {
   if (phase === "completed") {
@@ -85,7 +92,7 @@ function emitProgress(tracker) {
     percent = 0;
   }
   if (totalBytes > 0) {
-    percent = Math.max(percent, Math.round((Math.min(transferredBytes, totalBytes) / totalBytes) * 100));
+    percent = Math.round((Math.min(transferredBytes, totalBytes) / totalBytes) * 100);
   } else if (totalFiles > 0) {
     percent = Math.max(percent, Math.round((Math.min(completedFiles, totalFiles) / totalFiles) * 100));
   }
@@ -168,19 +175,29 @@ function applyStructuredProgressEvent(tracker, payload) {
     return false;
   }
 
+  const payloadTotalBytes = Number(payload.total_bytes);
+  const payloadDownloadedBytes = Number(payload.downloaded_bytes);
+  const payloadPercent = Number(payload.percent);
+
   if (Number.isFinite(Number(payload.total_bytes))) {
-    tracker.totalBytes = Math.max(0, Number(payload.total_bytes));
+    tracker.totalBytes = Math.max(0, payloadTotalBytes);
   }
   if (Number.isFinite(Number(payload.downloaded_bytes))) {
-    tracker.transferredBytes = Math.max(0, Number(payload.downloaded_bytes));
+    tracker.transferredBytes = Math.max(0, payloadDownloadedBytes);
   }
   if (Number.isFinite(Number(payload.percent))) {
-    tracker.percent = Math.max(0, Number(payload.percent));
+    tracker.percent = Math.max(0, payloadPercent);
   }
-  if (payload.phase) {
-    tracker.phase = structuredPhaseText(payload.phase);
+
+  const completeByBytes = tracker.totalBytes > 0 && tracker.transferredBytes >= tracker.totalBytes;
+  const completeByPercent = Number.isFinite(payloadPercent) && payloadPercent >= 100;
+  const isComplete = payload.phase === "completed" && (completeByBytes || completeByPercent);
+  const phase = isComplete ? "completed" : payload.phase === "completed" ? "downloading" : payload.phase;
+
+  if (phase) {
+    tracker.phase = structuredPhaseText(phase);
   }
-  tracker.state = payload.phase === "completed" ? "completed" : "running";
+  tracker.state = isComplete ? "completed" : "running";
   emitProgress(tracker);
   return true;
 }
@@ -235,12 +252,262 @@ function queuePath() {
   return path.join(app.getPath("userData"), "queue.json");
 }
 
+function sessionPath() {
+  return path.join(app.getPath("userData"), "session.json");
+}
+
 function randomId(prefix) {
   return `${prefix}-${Date.now()}-${crypto.randomBytes(4).toString("hex")}`;
 }
 
 function cleanText(value) {
   return String(value ?? "").trim();
+}
+
+function logsDirectoryPath() {
+  return path.join(app.getPath("userData"), "logs");
+}
+
+function logFilePath() {
+  return path.join(logsDirectoryPath(), LOG_FILE_NAME);
+}
+
+function rotatedLogFilePath(index) {
+  return path.join(logsDirectoryPath(), `${LOG_FILE_NAME}.${index}`);
+}
+
+function normalizeLogText(text) {
+  return String(text ?? "")
+    .replace(/\x1b\[[0-9;?]*[ -/]*[@-~]/g, "")
+    .replace(/\r(?!\n)/g, "\n");
+}
+
+function formatLogEntry(stream, text) {
+  const timestamp = new Date().toISOString();
+  const label = stream === "stderr" ? "ERR" : "OUT";
+  const normalized = normalizeLogText(text).replace(/\r?\n$/, "");
+  const lines = normalized ? normalized.split(/\r?\n/) : [""];
+  return `${lines.map((line) => `[${timestamp}] [${label}] ${line}`).join(os.EOL)}${os.EOL}`;
+}
+
+async function ensureLogDirectory() {
+  await fs.mkdir(logsDirectoryPath(), { recursive: true });
+}
+
+async function rotateLogIfNeeded(incomingBytes = 0) {
+  await ensureLogDirectory();
+  const targetPath = logFilePath();
+  const stat = await fs.stat(targetPath).catch(() => null);
+  if (!stat || stat.size + incomingBytes <= MAX_LOG_BYTES) {
+    return;
+  }
+
+  await fs.rm(rotatedLogFilePath(MAX_LOG_FILES), { force: true });
+  for (let index = MAX_LOG_FILES - 1; index >= 1; index -= 1) {
+    const from = rotatedLogFilePath(index);
+    const to = rotatedLogFilePath(index + 1);
+    try {
+      await fs.rename(from, to);
+    } catch (error) {
+      if (error.code !== "ENOENT") {
+        throw error;
+      }
+    }
+  }
+  await fs.rename(targetPath, rotatedLogFilePath(1)).catch((error) => {
+    if (error.code !== "ENOENT") {
+      throw error;
+    }
+  });
+}
+
+async function writeLogNow(text, stream = "stdout") {
+  const entry = formatLogEntry(stream, text);
+  await rotateLogIfNeeded(Buffer.byteLength(entry, "utf8"));
+  await fs.appendFile(logFilePath(), entry, "utf8");
+}
+
+function recordLog(stream, text) {
+  logWriteChain = logWriteChain
+    .then(() => writeLogNow(text, stream))
+    .catch(() => {});
+  return logWriteChain;
+}
+
+async function getLogStatus() {
+  await ensureLogDirectory();
+  const targetPath = logFilePath();
+  const stat = await fs.stat(targetPath).catch(() => null);
+  return {
+    path: targetPath,
+    directory: logsDirectoryPath(),
+    size: stat?.size || 0,
+    maxBytes: MAX_LOG_BYTES,
+    maxFiles: MAX_LOG_FILES
+  };
+}
+
+function endpointHostname(endpoint) {
+  try {
+    return new URL(endpoint).hostname.toLowerCase();
+  } catch {
+    return "";
+  }
+}
+
+function shouldBypassProxy(endpoint) {
+  const hostname = endpointHostname(endpoint);
+  return hostname === "hf-mirror.com" || hostname.endsWith(".hf-mirror.com");
+}
+
+function mergeNoProxy(existingValue, hosts) {
+  const values = String(existingValue || "")
+    .split(",")
+    .map((item) => item.trim())
+    .filter(Boolean);
+  const seen = new Set(values.map((item) => item.toLowerCase()));
+
+  for (const host of hosts) {
+    if (!seen.has(host.toLowerCase())) {
+      values.push(host);
+      seen.add(host.toLowerCase());
+    }
+  }
+
+  return values.join(",");
+}
+
+function createChildEnv(extraEnv = {}, context = {}) {
+  const childEnv = { ...process.env, ...extraEnv };
+  const endpoint = context.bypassProxyEndpoint || "";
+  if (!shouldBypassProxy(endpoint)) {
+    return childEnv;
+  }
+
+  for (const key of PROXY_ENV_KEYS) {
+    delete childEnv[key];
+  }
+
+  const noProxyValue = mergeNoProxy(childEnv.NO_PROXY || childEnv.no_proxy, ["hf-mirror.com", ".hf-mirror.com"]);
+  for (const key of NO_PROXY_ENV_KEYS) {
+    childEnv[key] = noProxyValue;
+  }
+
+  return childEnv;
+}
+
+function globToRegExp(pattern) {
+  const source = String(pattern)
+    .split("")
+    .map((char) => {
+      if (char === "*") {
+        return ".*";
+      }
+      if (char === "?") {
+        return ".";
+      }
+      return char.replace(/[|\\{}()[\]^$+?.]/g, "\\$&");
+    })
+    .join("");
+  return new RegExp(`^${source}$`, "i");
+}
+
+function fileMatchesPattern(filePath, pattern) {
+  const normalizedPath = String(filePath).replace(/\\/g, "/");
+  const normalizedPattern = String(pattern).replace(/\\/g, "/");
+  const basename = normalizedPath.split("/").pop() || normalizedPath;
+  const target = normalizedPattern.includes("/") ? normalizedPath : basename;
+  return globToRegExp(normalizedPattern).test(target);
+}
+
+function filteredExplicitFiles(form) {
+  const includePatterns = splitList(form?.include);
+  const excludePatterns = splitList(form?.exclude);
+  return splitFilenames(form?.files).filter((filePath) => {
+    if (includePatterns.length && !includePatterns.some((pattern) => fileMatchesPattern(filePath, pattern))) {
+      return false;
+    }
+    if (excludePatterns.some((pattern) => fileMatchesPattern(filePath, pattern))) {
+      return false;
+    }
+    return true;
+  });
+}
+
+function repoPathSegments(filePath) {
+  return String(filePath)
+    .replace(/\\/g, "/")
+    .split("/")
+    .map((part) => part.trim())
+    .filter((part) => part && part !== "." && part !== ".." && !part.endsWith(":"));
+}
+
+function commonDirectory(directories) {
+  const cleanDirectories = directories.map((directory) => path.resolve(directory));
+  if (!cleanDirectories.length) {
+    return "";
+  }
+  let common = cleanDirectories[0];
+  for (const directory of cleanDirectories.slice(1)) {
+    while (common && directory !== common && !directory.startsWith(`${common}${path.sep}`)) {
+      const parent = path.dirname(common);
+      if (parent === common) {
+        return parent;
+      }
+      common = parent;
+    }
+  }
+  return common;
+}
+
+function resolveDownloadDirectory(form) {
+  const localDir = cleanText(form?.localDir);
+  if (!localDir) {
+    return "";
+  }
+
+  const explicitFiles = filteredExplicitFiles(form);
+  if (!explicitFiles.length) {
+    return path.resolve(localDir);
+  }
+
+  const directories = explicitFiles
+    .map((filePath) => repoPathSegments(filePath))
+    .filter((segments) => segments.length)
+    .map((segments) => path.dirname(path.join(localDir, ...segments)));
+
+  return commonDirectory(directories) || path.resolve(localDir);
+}
+
+function withDownloadDirectory(item, form) {
+  const downloadDir = resolveDownloadDirectory(form);
+  return downloadDir ? { ...item, downloadDir } : item;
+}
+
+function downloadRunnerCandidates() {
+  const sourceRunnerPath = path.join(__dirname, "src", DOWNLOAD_RUNNER_FILENAME);
+  if (!app.isPackaged) {
+    return [sourceRunnerPath];
+  }
+
+  const unpackedRunnerPath = sourceRunnerPath.replace(
+    `${path.sep}app.asar${path.sep}`,
+    `${path.sep}app.asar.unpacked${path.sep}`
+  );
+
+  return [...new Set([path.join(process.resourcesPath, DOWNLOAD_RUNNER_FILENAME), unpackedRunnerPath])];
+}
+
+async function resolveDownloadRunnerPath() {
+  for (const candidate of downloadRunnerCandidates()) {
+    try {
+      await fs.access(candidate);
+      return candidate;
+    } catch {
+      // Try the next known packaged/development location.
+    }
+  }
+  return "";
 }
 
 function defaultSettings() {
@@ -267,6 +534,36 @@ function defaultSettings() {
   };
 }
 
+function sanitizeSettings(settings) {
+  return { ...settings, token: "" };
+}
+
+function normalizeSessionFile(file) {
+  return {
+    path: String(file?.path ?? ""),
+    size: Number(file?.size ?? 0) || 0,
+    lfs: Boolean(file?.lfs),
+    oid: String(file?.oid ?? "")
+  };
+}
+
+function normalizeSession(session = {}) {
+  const source = session && typeof session === "object" ? session : {};
+  const form = source.form && typeof source.form === "object" ? sanitizeSettings(source.form) : {};
+  const repoFiles = Array.isArray(source.repoFiles)
+    ? source.repoFiles.map(normalizeSessionFile).filter((file) => file.path)
+    : [];
+
+  return {
+    version: 1,
+    savedAt: cleanText(source.savedAt),
+    form,
+    repoFiles,
+    fileSearch: String(source.fileSearch ?? ""),
+    filePreviewStatus: String(source.filePreviewStatus ?? "")
+  };
+}
+
 async function loadSettings() {
   try {
     const content = await fs.readFile(settingsPath(), "utf8");
@@ -277,10 +574,40 @@ async function loadSettings() {
 }
 
 async function saveSettings(settings) {
-  const safeSettings = { ...settings, token: "" };
+  const safeSettings = sanitizeSettings(settings);
   await fs.mkdir(path.dirname(settingsPath()), { recursive: true });
   await fs.writeFile(settingsPath(), JSON.stringify(safeSettings, null, 2), "utf8");
   return true;
+}
+
+function saveSettingsSync(settings) {
+  const safeSettings = sanitizeSettings(settings);
+  fsSync.mkdirSync(path.dirname(settingsPath()), { recursive: true });
+  fsSync.writeFileSync(settingsPath(), JSON.stringify(safeSettings, null, 2), "utf8");
+  return true;
+}
+
+async function loadSession() {
+  try {
+    const content = await fs.readFile(sessionPath(), "utf8");
+    return normalizeSession(JSON.parse(content));
+  } catch {
+    return normalizeSession();
+  }
+}
+
+async function saveSession(session) {
+  const normalized = normalizeSession({ ...session, savedAt: new Date().toISOString() });
+  await fs.mkdir(path.dirname(sessionPath()), { recursive: true });
+  await fs.writeFile(sessionPath(), JSON.stringify(normalized, null, 2), "utf8");
+  return normalized;
+}
+
+function saveSessionSync(session) {
+  const normalized = normalizeSession({ ...session, savedAt: new Date().toISOString() });
+  fsSync.mkdirSync(path.dirname(sessionPath()), { recursive: true });
+  fsSync.writeFileSync(sessionPath(), JSON.stringify(normalized, null, 2), "utf8");
+  return normalized;
 }
 
 async function loadLibrary() {
@@ -334,7 +661,10 @@ async function loadSavedQueue() {
     const content = await fs.readFile(queuePath(), "utf8");
     const queue = normalizeQueue(JSON.parse(content));
     queue.items = queue.items.map((item) =>
-      item.status === "running" ? { ...item, status: "queued", historyId: "", startedAt: "", exitCode: null } : item
+      withDownloadDirectory(
+        item.status === "running" ? { ...item, status: "queued", historyId: "", startedAt: "", exitCode: null } : item,
+        item.form || item
+      )
     );
     return queue;
   } catch {
@@ -546,11 +876,12 @@ async function resolveCli() {
 
 async function resolveDownloadRuntime() {
   const python = await detectPython();
-  if (python.pythonPath && python.hubVersion) {
+  const runnerPath = await resolveDownloadRunnerPath();
+  if (python.pythonPath && python.hubVersion && runnerPath) {
     return {
       kind: "python",
       path: python.pythonPath,
-      args: [DOWNLOAD_RUNNER_PATH],
+      args: [runnerPath],
       python
     };
   }
@@ -614,7 +945,7 @@ function spawnManaged(commandPath, args, env, kind, context = {}) {
   const child = spawn(commandPath, args, {
     shell: false,
     windowsHide: true,
-    env: { ...process.env, ...env },
+    env: createChildEnv(env, context),
     stdio: ["pipe", "pipe", "pipe"]
   });
 
@@ -651,7 +982,7 @@ function spawnManaged(commandPath, args, env, kind, context = {}) {
           // Fall back to plain log output when the structured line is malformed.
         }
       }
-      emit("process:output", { stream: "stdout", text: `${line}\n` });
+      recordLog("stdout", `${line}\n`);
     }
   };
 
@@ -664,17 +995,14 @@ function spawnManaged(commandPath, args, env, kind, context = {}) {
     if (!context.structuredProgress && updateProgressFromOutput(activeContext.progressTracker, text)) {
       emitProgress(activeContext.progressTracker);
     }
-    emit("process:output", {
-      stream,
-      text
-    });
+    recordLog(stream, text);
   };
 
   child.stdout?.on("data", (chunk) => push("stdout", chunk));
   child.stderr?.on("data", (chunk) => push("stderr", chunk));
 
   child.on("error", (error) => {
-    emit("process:output", { stream: "stderr", text: `${error.message}\n` });
+    recordLog("stderr", `${error.message}\n`);
   });
 
   child.on("close", (code) => {
@@ -717,7 +1045,7 @@ function spawnManaged(commandPath, args, env, kind, context = {}) {
     }
 
     handleProcessClosed(kind, historyId, queueId, state, code).catch((error) => {
-      emit("process:output", { stream: "stderr", text: `[任务] ${error.message}\n` });
+      recordLog("stderr", `[任务] ${error.message}\n`);
     });
   });
 
@@ -764,13 +1092,29 @@ function killActiveProcess(finalStatus = "canceled") {
 
 ipcMain.handle("settings:load", loadSettings);
 ipcMain.handle("settings:save", (_event, settings) => saveSettings(settings));
+ipcMain.on("settings:saveSync", (event, settings) => {
+  try {
+    event.returnValue = saveSettingsSync(settings);
+  } catch {
+    event.returnValue = false;
+  }
+});
+ipcMain.handle("session:load", loadSession);
+ipcMain.handle("session:save", (_event, session) => saveSession(session));
+ipcMain.on("session:saveSync", (event, session) => {
+  try {
+    event.returnValue = Boolean(saveSessionSync(session));
+  } catch {
+    event.returnValue = false;
+  }
+});
 ipcMain.handle("library:load", loadLibrary);
 ipcMain.handle("queue:load", () => queueState);
 
 ipcMain.handle("queue:add", async (_event, form) => {
   const cli = await resolveCli();
   const plan = buildDownloadPlan(form, cli?.name ?? "hf");
-  const item = createQueueItem(randomId("queue"), form, plan);
+  const item = withDownloadDirectory(createQueueItem(randomId("queue"), form, plan), form);
   return publishQueue(appendQueueItem(queueState, item));
 });
 
@@ -846,6 +1190,48 @@ ipcMain.handle("shell:openPath", async (_event, targetPath) => {
     return "路径为空";
   }
   return shell.openPath(targetPath);
+});
+
+ipcMain.handle("log:status", async () => getLogStatus());
+
+ipcMain.handle("log:write", async (_event, payload) => {
+  await recordLog(payload?.stream || "stdout", payload?.text || "");
+  return getLogStatus();
+});
+
+ipcMain.handle("log:open", async () => {
+  const status = await getLogStatus();
+  await fs.appendFile(status.path, "", "utf8");
+  shell.showItemInFolder(status.path);
+  return status;
+});
+
+ipcMain.handle("log:clear", async () => {
+  await logWriteChain;
+  await ensureLogDirectory();
+  await fs.rm(logFilePath(), { force: true });
+  for (let index = 1; index <= MAX_LOG_FILES; index += 1) {
+    await fs.rm(rotatedLogFilePath(index), { force: true });
+  }
+  return getLogStatus();
+});
+
+ipcMain.handle("download:openDirectory", async (_event, form) => {
+  const targetPath = resolveDownloadDirectory(form);
+  if (!targetPath) {
+    throw new Error("请先选择保存目录。");
+  }
+
+  const stat = await fs.stat(targetPath).catch(() => null);
+  if (!stat?.isDirectory()) {
+    throw new Error(`目录不存在：${targetPath}`);
+  }
+
+  const result = await shell.openPath(targetPath);
+  if (result) {
+    throw new Error(result);
+  }
+  return { path: targetPath };
 });
 
 ipcMain.handle("clipboard:writeText", (_event, text) => {
@@ -928,10 +1314,15 @@ ipcMain.handle("download:start", async (_event, form) => {
       historyId: item.id,
       progressTracker,
       structuredProgress: true,
+      bypassProxyEndpoint: plan.endpoint,
       stdinText: JSON.stringify({ form })
     });
   } else {
-    spawnManaged(cli.path, plan.args, plan.env, "download", { historyId: item.id, progressTracker });
+    spawnManaged(cli.path, plan.args, plan.env, "download", {
+      historyId: item.id,
+      progressTracker,
+      bypassProxyEndpoint: plan.endpoint
+    });
   }
 
   return { ...plan, cli: runtime.cli ?? null, python: runtime.python ?? null, historyItem: item };
@@ -976,7 +1367,7 @@ async function startNextQueueItem() {
       completedAt: new Date().toISOString()
     });
     await publishQueue(queueState);
-    emit("process:output", { stream: "stderr", text: `[队列] ${item.repoId}: ${error.message}\n` });
+    recordLog("stderr", `[队列] ${item.repoId}: ${error.message}\n`);
     await startNextQueueItem();
     return;
   }
@@ -990,10 +1381,11 @@ async function startNextQueueItem() {
     startedAt,
     historyId: historyItem.id,
     endpoint: plan.endpoint,
-    command: plan.maskedCommand
+    command: plan.maskedCommand,
+    downloadDir: resolveDownloadDirectory(item.form)
   });
   await publishQueue(queueState);
-  emit("process:output", { stream: "stdout", text: `[队列] 开始 ${item.repoId}\n[命令] ${plan.maskedCommand}\n\n` });
+  recordLog("stdout", `[队列] 开始 ${item.repoId}\n[命令] ${plan.maskedCommand}\n`);
   emitProgress(progressTracker);
 
   if (runtime.kind === "python") {
@@ -1002,13 +1394,15 @@ async function startNextQueueItem() {
       queueId: item.id,
       progressTracker,
       structuredProgress: true,
+      bypassProxyEndpoint: plan.endpoint,
       stdinText: JSON.stringify({ form: item.form })
     });
   } else {
     spawnManaged(cli.path, plan.args, plan.env, "download", {
       historyId: historyItem.id,
       queueId: item.id,
-      progressTracker
+      progressTracker,
+      bypassProxyEndpoint: plan.endpoint
     });
   }
 }

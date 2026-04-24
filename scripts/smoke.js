@@ -108,4 +108,11 @@ assert.equal(icon.readUInt16LE(0), 0);
 assert.equal(icon.readUInt16LE(2), 1);
 assert.ok(icon.readUInt16LE(4) >= 5);
 
+const packageJson = JSON.parse(fs.readFileSync(path.join(__dirname, "..", "package.json"), "utf8"));
+const extraResources = packageJson.build?.extraResources ?? [];
+assert.ok(
+  extraResources.some((item) => item.from === "src/hf_download_runner.py" && item.to === "hf_download_runner.py"),
+  "hf_download_runner.py should be copied outside app.asar for external python.exe"
+);
+
 console.log("smoke ok");

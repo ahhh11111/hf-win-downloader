@@ -7,7 +7,6 @@ from tqdm.auto import tqdm as base_tqdm
 
 
 EVENT_PREFIX = "__HF_EVENT__ "
-TRACKED_BAR_NAME = "huggingface_hub.snapshot_download"
 
 
 def emit_event(payload):
@@ -116,9 +115,9 @@ def set_runtime_environment(form):
         os.environ["HF_HUB_DISABLE_SYMLINKS_WARNING"] = "1"
 
 
-def phase_from_desc(description):
+def phase_from_desc(description, downloaded_bytes=0, total_bytes=0):
     desc = clean_text(description).lower()
-    if "complete" in desc:
+    if "complete" in desc and total_bytes > 0 and downloaded_bytes >= total_bytes:
         return "completed"
     if "download" in desc:
         return "downloading"
@@ -127,12 +126,16 @@ def phase_from_desc(description):
 
 class JsonProgressTqdm(base_tqdm):
     def __init__(self, *args, **kwargs):
-        self._hf_name = kwargs.get("name") or ""
         self._hf_desc = kwargs.get("desc") or ""
         self._last_signature = None
-        kwargs["disable"] = True
+        kwargs["disable"] = False
+        kwargs["mininterval"] = 0
+        kwargs["miniters"] = 1
         super().__init__(*args, **kwargs)
         self._emit_progress()
+
+    def display(self, *args, **kwargs):
+        return None
 
     def update(self, n=1):
         result = super().update(n)
@@ -156,7 +159,7 @@ class JsonProgressTqdm(base_tqdm):
         return super().close()
 
     def _emit_progress(self, force=False):
-        if self._hf_name != TRACKED_BAR_NAME or str(getattr(self, "unit", "")) != "B":
+        if str(getattr(self, "unit", "")) != "B":
             return
 
         total_bytes = int(self.total or 0)
@@ -164,13 +167,13 @@ class JsonProgressTqdm(base_tqdm):
         percent = round((downloaded_bytes / total_bytes) * 100, 2) if total_bytes > 0 else 0.0
         payload = {
             "event": "progress",
-            "phase": phase_from_desc(self._hf_desc),
+            "phase": phase_from_desc(self._hf_desc, downloaded_bytes, total_bytes),
             "total_bytes": total_bytes,
             "downloaded_bytes": downloaded_bytes,
             "percent": percent,
         }
         signature = (payload["phase"], payload["total_bytes"], payload["downloaded_bytes"], payload["percent"])
-        if not force and signature == self._last_signature:
+        if signature == self._last_signature:
             return
         self._last_signature = signature
         emit_event(payload)

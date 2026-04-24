@@ -15,9 +15,6 @@
   --danger: #d84b4b;
   --danger-soft: #fff1f1;
   --violet: #6d5bd0;
-  --log: #1d252e;
-  --log-ink: #d8e1e9;
-  --log-muted: #89a098;
   --warn: #fff7df;
   --warn-line: #e7c667;
   --shadow: 0 10px 26px rgba(31, 41, 55, 0.06);
@@ -524,8 +521,7 @@ input:disabled {
 
 .file-browser-head,
 .file-browser-tools,
-.file-summary,
-.file-actions {
+.file-summary {
   display: flex;
   align-items: center;
   gap: 10px;
@@ -533,8 +529,7 @@ input:disabled {
 }
 
 .file-browser-head,
-.file-summary,
-.file-actions {
+.file-summary {
   justify-content: space-between;
 }
 
@@ -557,15 +552,9 @@ input:disabled {
   grid-template-columns: minmax(0, 1fr) auto auto;
 }
 
-.file-browser-tools .ghost-button,
-.file-actions .small-action {
+.file-browser-tools .ghost-button {
   min-height: 36px;
   font-size: 13px;
-}
-
-.file-actions .small-action {
-  min-width: 0;
-  padding: 0 14px;
 }
 
 .file-summary {
@@ -830,6 +819,42 @@ input:disabled {
   line-height: 1.45;
 }
 
+.log-tools {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.log-tools .mini-head {
+  min-height: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+}
+
+.log-tools .mini-head span:last-child {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 500;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.log-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
 .favorites-panel {
   display: grid;
   grid-template-rows: auto minmax(84px, auto);
@@ -849,8 +874,8 @@ input:disabled {
 
 .workspace {
   display: grid;
-  grid-template-rows: minmax(168px, auto) minmax(220px, 0.85fr) minmax(300px, 1.15fr);
-  gap: 18px;
+  grid-template-rows: minmax(168px, auto) minmax(0, 1fr);
+  gap: 14px;
   min-width: 0;
   min-height: 0;
 }
@@ -882,6 +907,39 @@ input:disabled {
   gap: 10px;
   min-width: 0;
   flex-wrap: wrap;
+}
+
+.queue-panel {
+  container-type: inline-size;
+  grid-template-rows: auto minmax(0, 1fr);
+}
+
+.queue-panel .panel-head {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  align-items: center;
+  gap: 12px;
+}
+
+.queue-panel .panel-head h2 {
+  min-width: 0;
+}
+
+.queue-panel .panel-actions {
+  display: grid;
+  grid-template-columns: repeat(3, max-content) 40px;
+  align-items: center;
+  justify-content: end;
+}
+
+.queue-panel .panel-actions .ghost-button {
+  min-width: 108px;
+  padding: 0 12px;
+}
+
+.queue-panel .panel-actions .icon-button {
+  width: 40px;
+  min-width: 40px;
 }
 
 .progress-head {
@@ -973,13 +1031,27 @@ input:disabled {
   justify-items: end;
 }
 
-.progress-metrics span:first-child {
+#progressCount {
+  min-width: 0;
+  overflow: hidden;
   color: #2d3748;
   font-size: 13px;
   font-weight: 700;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-.progress-metrics span:last-child {
+.progress-speed {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+#progressPercent {
   color: var(--accent);
   font-size: 26px;
   line-height: 1;
@@ -1047,8 +1119,7 @@ input:disabled {
   padding: 12px 14px;
 }
 
-.queue-list,
-.log-panel {
+.queue-list {
   align-content: stretch;
 }
 
@@ -1198,45 +1269,6 @@ input:disabled {
   min-height: 36px;
 }
 
-.log-panel {
-  grid-template-rows: 68px minmax(0, 1fr);
-}
-
-.log-head {
-  border-bottom: 0;
-}
-
-.auto-scroll {
-  display: inline-flex;
-  align-items: center;
-  gap: 9px;
-  min-height: 36px;
-  color: var(--muted);
-  font-size: 13px;
-  font-weight: 650;
-}
-
-#logOutput {
-  min-height: 0;
-  margin: 0 14px 14px;
-  overflow: auto;
-  padding: 18px 20px;
-  color: var(--log-ink);
-  background: var(--log);
-  border-radius: 7px;
-  font-family: "Cascadia Mono", "Consolas", monospace;
-  font-size: 13px;
-  line-height: 1.58;
-  overflow-wrap: anywhere;
-  white-space: pre-wrap;
-}
-
-#logOutput:empty::before {
-  content: "HF Downloader 已就绪\a等待开始下载...";
-  color: var(--log-muted);
-  white-space: pre;
-}
-
 .runbar {
   display: flex;
   align-items: center;
@@ -1288,15 +1320,6 @@ input:disabled {
 .danger-button:hover {
   color: #ffffff;
   background: var(--danger);
-}
-
-.log-expanded .workspace {
-  grid-template-rows: minmax(0, 1fr);
-}
-
-.log-expanded .progress-panel,
-.log-expanded .queue-panel {
-  display: none;
 }
 
 @media (max-width: 1320px) {
@@ -1358,7 +1381,7 @@ input:disabled {
   }
 
   .workspace {
-    grid-template-rows: repeat(3, minmax(0, auto));
+    grid-template-rows: repeat(2, minmax(0, auto));
   }
 }
 
@@ -1379,13 +1402,25 @@ input:disabled {
   }
 
   .file-browser-head,
-  .file-actions {
+  .log-actions,
+  .log-tools {
     align-items: stretch;
+  }
+
+  .file-browser-head {
     flex-direction: column;
   }
 
+  .log-actions {
+    flex-direction: column;
+  }
+
+  .log-tools {
+    grid-template-columns: 1fr;
+  }
+
   .file-browser-head .ghost-button,
-  .file-actions .small-action {
+  .log-actions .ghost-button {
     width: 100%;
   }
 
@@ -1416,11 +1451,24 @@ input:disabled {
   .progress-metrics {
     width: 100%;
     grid-template-columns: 1fr auto;
+    grid-template-areas:
+      "count percent"
+      "speed percent";
     align-items: end;
     justify-items: stretch;
   }
 
-  .progress-metrics span:last-child {
+  #progressCount {
+    grid-area: count;
+  }
+
+  .progress-speed {
+    grid-area: speed;
+  }
+
+  #progressPercent {
+    grid-area: percent;
+    align-self: center;
     justify-self: end;
   }
 
@@ -1483,5 +1531,37 @@ input:disabled {
   .secondary-button,
   .danger-button {
     min-width: 0;
+  }
+}
+
+@container (max-width: 620px) {
+  .queue-panel .panel-head {
+    grid-template-columns: 1fr;
+    align-items: stretch;
+    min-height: 0;
+    padding: 14px;
+  }
+
+  .queue-panel .panel-actions {
+    width: 100%;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    justify-content: stretch;
+  }
+
+  .queue-panel .panel-actions .ghost-button,
+  .queue-panel .panel-actions .icon-button {
+    width: 100%;
+    min-width: 0;
+  }
+}
+
+@container (max-width: 380px) {
+  .queue-panel .panel-actions {
+    gap: 8px;
+  }
+
+  .queue-panel .panel-actions .ghost-button {
+    padding: 0 8px;
+    font-size: 13px;
   }
 }

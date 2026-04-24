@@ -40,6 +40,12 @@
       "README.md",
       "package.json"
     ],
+    "extraResources": [
+      {
+        "from": "src/hf_download_runner.py",
+        "to": "hf_download_runner.py"
+      }
+    ],
     "win": {
       "signAndEditExecutable": false,
       "icon": "build/icon.ico",

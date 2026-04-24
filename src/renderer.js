@@ -36,9 +36,16 @@ const state = {
     completedFiles: 0,
     totalBytes: 0,
     transferredBytes: 0,
+    speedBytesPerSecond: 0,
     percent: 0,
     currentFile: "",
     phase: "等待开始"
+  },
+  speed: {
+    key: "",
+    lastBytes: 0,
+    lastTime: 0,
+    bytesPerSecond: 0
   },
   previewTimer: 0,
   saveTimer: 0
@@ -55,11 +62,13 @@ const els = {
   installCliButton: $("#installCliButton"),
   saveFavoriteButton: $("#saveFavoriteButton"),
   addQueueButton: $("#addQueueButton"),
+  openDownloadDirButton: $("#openDownloadDirButton"),
   startQueueButton: $("#startQueueButton"),
   stopQueueButton: $("#stopQueueButton"),
   clearQueueButton: $("#clearQueueButton"),
   startButton: $("#startButton"),
   stopButton: $("#stopButton"),
+  openLogButton: $("#openLogButton"),
   clearLogButton: $("#clearLogButton"),
   pickLocalDir: $("#pickLocalDir"),
   commandPreview: $("#commandPreview"),
@@ -73,20 +82,17 @@ const els = {
   fileList: $("#fileList"),
   selectFilteredButton: $("#selectFilteredButton"),
   clearFileSelectionButton: $("#clearFileSelectionButton"),
-  applySelectedFilesButton: $("#applySelectedFilesButton"),
-  applyFilteredFilesButton: $("#applyFilteredFilesButton"),
   progressTitle: $("#progressTitle"),
   progressSubtitle: $("#progressSubtitle"),
   progressCount: $("#progressCount"),
+  progressSpeed: $("#progressSpeed"),
   progressPercent: $("#progressPercent"),
   progressFill: $("#progressFill"),
-  logOutput: $("#logOutput"),
+  logStatus: $("#logStatus"),
   runState: $("#runState"),
   endpointGroup: $("#endpointGroup"),
   favoritesList: $("#favoritesList"),
   queueList: $("#queueList"),
-  autoScroll: $("#autoScroll"),
-  logExpandButton: $("#logExpandButton"),
   toggleTokenButton: $("#toggleTokenButton"),
   minimizeButton: $("#minimizeButton"),
   maximizeButton: $("#maximizeButton"),
@@ -113,6 +119,32 @@ function readForm() {
     }
   }
   return form;
+}
+
+function buildSessionSnapshot() {
+  return {
+    version: 1,
+    form: readForm(),
+    repoFiles: state.repoFiles,
+    fileSearch: els.fileSearch?.value || "",
+    filePreviewStatus: els.filePreviewStatus?.textContent || ""
+  };
+}
+
+function saveCurrentState() {
+  const form = readForm();
+  const session = buildSessionSnapshot();
+  return Promise.all([
+    window.hfBridge.saveSettings(form),
+    window.hfBridge.saveSession?.(session)
+  ]);
+}
+
+function saveCurrentStateSync() {
+  const form = readForm();
+  const session = buildSessionSnapshot();
+  window.hfBridge.saveSettingsSync?.(form);
+  window.hfBridge.saveSessionSync?.(session);
 }
 
 function buildRuntimeForm() {
@@ -276,10 +308,12 @@ function resetProgress() {
     completedFiles: 0,
     totalBytes: 0,
     transferredBytes: 0,
+    speedBytesPerSecond: 0,
     percent: 0,
     currentFile: "",
     phase: "先预览并选择文件，再开始下载。"
   };
+  resetSpeed(0, state.progress);
   updateProgressView();
 }
 
@@ -287,11 +321,14 @@ function scheduleSaveAndPreview() {
   clearTimeout(state.saveTimer);
   clearTimeout(state.previewTimer);
 
-  state.saveTimer = setTimeout(() => {
-    window.hfBridge.saveSettings(readForm()).catch(() => {});
-  }, 250);
+  state.saveTimer = setTimeout(() => saveCurrentState().catch(() => {}), 250);
 
   state.previewTimer = setTimeout(updatePreview, 120);
+}
+
+function scheduleSaveOnly() {
+  clearTimeout(state.saveTimer);
+  state.saveTimer = setTimeout(() => saveCurrentState().catch(() => {}), 250);
 }
 
 async function updatePreview() {
@@ -392,9 +429,69 @@ function formatBytes(size) {
   return `${current.toFixed(digits)} ${units[index]}`;
 }
 
+function formatSpeed(bytesPerSecond) {
+  const value = Number(bytesPerSecond) || 0;
+  return value > 0 ? `${formatBytes(value)}/s` : "-";
+}
+
+function resetSpeed(bytes = 0, progress = state.progress) {
+  state.speed = {
+    key: [progress.repoId || "", progress.endpoint || "", progress.totalBytes || 0].join("|"),
+    lastBytes: Math.max(0, Number(bytes) || 0),
+    lastTime: 0,
+    bytesPerSecond: 0
+  };
+}
+
+function updateDownloadSpeed(progress) {
+  const bytes = Math.max(0, Number(progress.transferredBytes) || 0);
+  const totalBytes = Math.max(0, Number(progress.totalBytes) || 0);
+  const key = [progress.repoId || "", progress.endpoint || "", totalBytes].join("|");
+  const now = performance.now();
+
+  if (progress.state !== "running") {
+    resetSpeed(bytes, progress);
+    progress.speedBytesPerSecond = 0;
+    return progress;
+  }
+
+  if (state.speed.key !== key || bytes < state.speed.lastBytes) {
+    state.speed = {
+      key,
+      lastBytes: bytes,
+      lastTime: now,
+      bytesPerSecond: 0
+    };
+    progress.speedBytesPerSecond = 0;
+    return progress;
+  }
+
+  if (!state.speed.lastTime) {
+    state.speed.lastBytes = bytes;
+    state.speed.lastTime = now;
+    progress.speedBytesPerSecond = state.speed.bytesPerSecond;
+    return progress;
+  }
+
+  const elapsed = (now - state.speed.lastTime) / 1000;
+  const delta = bytes - state.speed.lastBytes;
+
+  if (elapsed >= 0.35) {
+    const instant = delta > 0 ? delta / elapsed : 0;
+    state.speed.bytesPerSecond =
+      state.speed.bytesPerSecond > 0 ? state.speed.bytesPerSecond * 0.65 + instant * 0.35 : instant;
+    state.speed.lastBytes = bytes;
+    state.speed.lastTime = now;
+  }
+
+  progress.speedBytesPerSecond = state.speed.bytesPerSecond;
+  return progress;
+}
+
 updateProgressView = function updateProgressViewBytes(progress = state.progress) {
   const totalBytes = Number(progress.totalBytes) || 0;
   const transferredBytes = Number(progress.transferredBytes) || 0;
+  const speedBytesPerSecond = Number(progress.speedBytesPerSecond) || 0;
   const percent = Number.isFinite(progress.percent) ? Math.max(0, Math.min(100, Math.round(progress.percent))) : 0;
   const stateName = ["completed", "failed", "canceled", "running", "stopping"].includes(progress.state)
     ? progress.state
@@ -414,6 +511,7 @@ updateProgressView = function updateProgressViewBytes(progress = state.progress)
   els.progressSubtitle.textContent = progress.phase || "先预览并选择文件，再开始下载。";
   els.progressCount.textContent =
     totalBytes > 0 ? `${formatBytes(Math.min(transferredBytes, totalBytes))} / ${formatBytes(totalBytes)}` : "总大小待确认";
+  els.progressSpeed.textContent = progress.state === "running" ? formatSpeed(speedBytesPerSecond) : "-";
   els.progressPercent.textContent = `${percent}%`;
   els.progressFill.style.width = `${percent}%`;
 };
@@ -432,8 +530,6 @@ function updateFilePreviewSummary(visibleFiles = filteredRepoFiles()) {
     ? `共 ${total} 个文件 · 当前显示 ${visible} 个 · ${formatBytes(totalSize)}`
     : "未预览";
   els.fileSelectedSummary.textContent = `已选 ${selected} 个`;
-  els.applySelectedFilesButton.disabled = selected === 0;
-  els.applyFilteredFilesButton.disabled = visible === 0;
   els.selectFilteredButton.disabled = visible === 0;
   els.clearFileSelectionButton.disabled = selected === 0;
 }
@@ -479,7 +575,7 @@ function renderFileList() {
   if (!visibleFiles.length) {
     const empty = document.createElement("div");
     empty.className = "file-empty";
-    empty.textContent = "没有文件匹配当前搜索或 Include/Exclude";
+    empty.textContent = "没有文件匹配当前搜索或包含/排除规则";
     els.fileList.appendChild(empty);
     updateFilePreviewSummary(visibleFiles);
     return;
@@ -517,6 +613,7 @@ async function loadRepoFiles() {
     renderFileList();
   } finally {
     els.loadFilesButton.disabled = false;
+    scheduleSaveOnly();
   }
 }
 
@@ -524,27 +621,68 @@ function selectFiles(files) {
   for (const file of files) {
     state.selectedFiles.add(file.path);
   }
+  syncTextareaFromSelectedFiles();
   renderFileList();
 }
 
-function applyFilesToTextarea(files) {
-  const uniquePaths = [...new Set(files.map((file) => file.path).filter(Boolean))];
-  fieldElement("files").value = uniquePaths.join("\n");
-  state.selectedFiles = new Set(uniquePaths);
+function selectedFilePathsInOrder() {
+  const ordered = [];
+  const seen = new Set();
+
+  for (const file of state.repoFiles) {
+    if (state.selectedFiles.has(file.path)) {
+      ordered.push(file.path);
+      seen.add(file.path);
+    }
+  }
+
+  for (const filePath of state.selectedFiles) {
+    if (!seen.has(filePath)) {
+      ordered.push(filePath);
+    }
+  }
+
+  return ordered;
+}
+
+function syncTextareaFromSelectedFiles() {
+  fieldElement("files").value = selectedFilePathsInOrder().join("\n");
   scheduleSaveAndPreview();
-  renderFileList();
-  appendLog(`[预览] 已写入 ${uniquePaths.length} 个文件到下载列表。\n`);
+}
+
+function formatLogSize(bytes) {
+  const value = Number(bytes) || 0;
+  if (value < 1024) {
+    return `${value} B`;
+  }
+  if (value < 1024 * 1024) {
+    return `${Math.round(value / 1024)} KB`;
+  }
+  return `${(value / 1024 / 1024).toFixed(1)} MB`;
+}
+
+function updateLogStatus(status, message = "") {
+  if (!els.logStatus || !status) {
+    return;
+  }
+  const sizeText = formatLogSize(status.size);
+  els.logStatus.textContent = message || `${status.path} · ${sizeText}`;
 }
 
 function appendLog(text, stream = "stdout") {
   const normalized = String(text)
     .replace(/\x1b\[[0-9;?]*[ -/]*[@-~]/g, "")
     .replace(/\r(?!\n)/g, "\n");
-  const prefix = stream === "stderr" ? "" : "";
-  els.logOutput.textContent += prefix + normalized;
-  if (!els.autoScroll || els.autoScroll.checked) {
-    els.logOutput.scrollTop = els.logOutput.scrollHeight;
-  }
+  const writeLog = window.hfBridge.writeLog
+    ? window.hfBridge.writeLog(normalized, stream)
+    : Promise.resolve(null);
+  writeLog
+    .then((status) => updateLogStatus(status))
+    .catch((error) => {
+      if (els.logStatus) {
+        els.logStatus.textContent = `日志写入失败：${error.message}`;
+      }
+    });
 }
 
 function formatDate(value) {
@@ -631,7 +769,7 @@ function createRepoItem(item, options) {
 
   const path = document.createElement("span");
   path.className = "repo-path";
-  path.textContent = item.localDir || item.form?.localDir || "";
+  path.textContent = item.downloadDir || item.localDir || item.form?.localDir || "";
 
   main.append(titleLine, meta, path);
   row.append(main, createIconButton(options.removeAction, item.id, options.removeTitle));
@@ -752,9 +890,18 @@ async function addQueueItem() {
   }
 }
 
+async function openDownloadDirectory() {
+  try {
+    const result = await window.hfBridge.openDownloadDirectory(buildRuntimeForm());
+    appendLog(`[目录] 已打开 ${result.path}\n`);
+  } catch (error) {
+    appendLog(`[目录] ${error.message}\n`, "stderr");
+  }
+}
+
 async function startQueue() {
   try {
-    els.logOutput.textContent = "";
+    appendLog("[队列] 启动队列。\n");
     state.queue = await window.hfBridge.startQueue();
     renderQueue();
     setRunning(true, "队列中");
@@ -785,6 +932,36 @@ async function clearQueue() {
   appendLog("[队列] 已清空已完成任务。\n");
 }
 
+async function refreshLogStatus() {
+  try {
+    updateLogStatus(await window.hfBridge.getLogStatus());
+  } catch (error) {
+    if (els.logStatus) {
+      els.logStatus.textContent = `日志状态读取失败：${error.message}`;
+    }
+  }
+}
+
+async function openLog() {
+  try {
+    updateLogStatus(await window.hfBridge.openLog(), "已打开日志文件位置");
+  } catch (error) {
+    if (els.logStatus) {
+      els.logStatus.textContent = `打开日志失败：${error.message}`;
+    }
+  }
+}
+
+async function clearLog() {
+  try {
+    updateLogStatus(await window.hfBridge.clearLog(), "日志已清空");
+  } catch (error) {
+    if (els.logStatus) {
+      els.logStatus.textContent = `清空日志失败：${error.message}`;
+    }
+  }
+}
+
 function setRunning(running, label = running ? "运行中" : "已停止", failed = false) {
   state.running = running;
   document.body.classList.toggle("busy", running);
@@ -812,7 +989,6 @@ async function checkCli() {
 }
 
 async function startDownload() {
-  els.logOutput.textContent = "";
   try {
     const plan = await window.hfBridge.startDownload(buildRuntimeForm());
     appendLog(`[命令] ${plan.maskedCommand}\n[源] ${plan.endpoint}\n\n`);
@@ -828,7 +1004,6 @@ async function startDownload() {
 
 async function installCli() {
   try {
-    els.logOutput.textContent = "";
     await window.hfBridge.installCli();
     setRunning(true, "安装中");
     appendLog("[安装] python -m pip install -U huggingface_hub\n\n");
@@ -885,30 +1060,25 @@ function bindEvents() {
   els.installCliButton.addEventListener("click", installCli);
   els.saveFavoriteButton.addEventListener("click", saveFavorite);
   els.addQueueButton.addEventListener("click", addQueueItem);
+  els.openDownloadDirButton.addEventListener("click", openDownloadDirectory);
   els.startQueueButton.addEventListener("click", startQueue);
   els.stopQueueButton.addEventListener("click", stopQueue);
   els.clearQueueButton.addEventListener("click", clearQueue);
   els.startButton.addEventListener("click", startDownload);
   els.stopButton.addEventListener("click", () => window.hfBridge.stopProcess());
-  els.clearLogButton.addEventListener("click", () => {
-    els.logOutput.textContent = "";
-  });
+  els.openLogButton.addEventListener("click", openLog);
+  els.clearLogButton.addEventListener("click", clearLog);
 
   els.loadFilesButton.addEventListener("click", loadRepoFiles);
-  els.fileSearch.addEventListener("input", renderFileList);
+  els.fileSearch.addEventListener("input", () => {
+    renderFileList();
+    scheduleSaveOnly();
+  });
   els.selectFilteredButton.addEventListener("click", () => selectFiles(filteredRepoFiles()));
   els.clearFileSelectionButton.addEventListener("click", () => {
     state.selectedFiles.clear();
+    syncTextareaFromSelectedFiles();
     renderFileList();
-  });
-  els.applySelectedFilesButton.addEventListener("click", () => {
-    const selected = state.repoFiles.filter((file) => state.selectedFiles.has(file.path));
-    applyFilesToTextarea(selected);
-  });
-  els.applyFilteredFilesButton.addEventListener("click", () => {
-    const visibleFiles = filteredRepoFiles();
-    selectFiles(visibleFiles);
-    applyFilesToTextarea(visibleFiles);
   });
   els.fileList.addEventListener("change", (event) => {
     const checkbox = event.target.closest('input[type="checkbox"][data-path]');
@@ -920,6 +1090,7 @@ function bindEvents() {
     } else {
       state.selectedFiles.delete(checkbox.dataset.path);
     }
+    syncTextareaFromSelectedFiles();
     updateFilePreviewSummary();
   });
 
@@ -929,13 +1100,16 @@ function bindEvents() {
     els.toggleTokenButton.classList.toggle("active", token.type === "text");
   });
 
-  els.logExpandButton?.addEventListener("click", () => {
-    document.body.classList.toggle("log-expanded");
-  });
-
   els.minimizeButton?.addEventListener("click", () => window.hfBridge.minimizeWindow?.());
   els.maximizeButton?.addEventListener("click", () => window.hfBridge.toggleMaximizeWindow?.());
-  els.closeButton?.addEventListener("click", () => window.hfBridge.closeWindow?.());
+  els.closeButton?.addEventListener("click", () => {
+    saveCurrentStateSync();
+    window.hfBridge.closeWindow?.();
+  });
+
+  window.addEventListener("beforeunload", () => {
+    saveCurrentStateSync();
+  });
 
   els.favoritesList.addEventListener("click", async (event) => {
     const target = event.target.closest("[data-action]");
@@ -968,10 +1142,9 @@ function bindEvents() {
   });
 
   window.hfBridge.onProcessProgress?.((payload) => {
-    state.progress = { ...state.progress, ...payload };
+    state.progress = updateDownloadSpeed({ ...state.progress, ...payload });
     updateProgressView();
   });
-  window.hfBridge.onProcessOutput(({ stream, text }) => appendLog(text, stream));
   window.hfBridge.onProcessStatus((payload) => {
     if (payload.state === "item-completed") {
       return;
@@ -1050,11 +1223,22 @@ async function init() {
     }
   }
   const settings = await window.hfBridge.loadSettings();
-  writeForm(settings);
+  const session = (await window.hfBridge.loadSession?.().catch(() => null)) || {};
+  writeForm({ ...settings, ...(session.form || {}) });
+  if (Array.isArray(session.repoFiles)) {
+    state.repoFiles = session.repoFiles;
+  }
+  if (els.fileSearch && typeof session.fileSearch === "string") {
+    els.fileSearch.value = session.fileSearch;
+  }
+  if (els.filePreviewStatus && session.filePreviewStatus) {
+    els.filePreviewStatus.textContent = session.filePreviewStatus;
+  }
   syncSelectedFilesFromTextarea();
   renderFileList();
   await loadLibrary();
   await loadQueue();
+  await refreshLogStatus();
   await updatePreview();
   await checkCli();
 }
