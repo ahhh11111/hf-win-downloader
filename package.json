@@ -1,6 +1,6 @@
 {
   "name": "hf-win-downloader",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "description": "A streamlined Windows desktop downloader for Hugging Face Hub repositories.",
   "main": "main.js",
   "private": true,
