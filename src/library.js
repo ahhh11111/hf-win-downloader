@@ -47,6 +47,10 @@ function titleFromForm(form) {
   return cleanText(form.repoId) || "未命名仓库";
 }
 
+function displayRepoId(form, plan) {
+  return cleanText(plan?.displayRepoId) || cleanText(form.repoId);
+}
+
 function favoriteKey(form) {
   const repoType = cleanText(form.repoType) || "model";
   const repoId = cleanText(form.repoId).toLowerCase();
@@ -66,6 +70,7 @@ function summarizeForm(form, endpoint) {
 
 function createHistoryItem(id, form, plan, createdAt = new Date().toISOString()) {
   const snapshot = formSnapshot(form);
+  const repoId = displayRepoId(snapshot, plan);
   return {
     id,
     createdAt,
@@ -73,9 +78,9 @@ function createHistoryItem(id, form, plan, createdAt = new Date().toISOString())
     completedAt: "",
     status: "running",
     exitCode: null,
-    title: titleFromForm(snapshot),
+    title: repoId || titleFromForm(snapshot),
     repoType: cleanText(snapshot.repoType) || "model",
-    repoId: cleanText(snapshot.repoId),
+    repoId,
     localDir: cleanText(snapshot.localDir),
     endpoint: plan.endpoint,
     command: plan.maskedCommand,

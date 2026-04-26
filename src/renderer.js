@@ -53,6 +53,12 @@ const state = {
 
 const $ = (selector) => document.querySelector(selector);
 const LEFT_PANE_WIDTH_KEY = "hfDownloader.leftPaneWidth";
+const SPEED_SAMPLE_WINDOW_MS = 30000;
+const SPEED_MIN_WINDOW_MS = 3000;
+const SPEED_EWMA_HALF_LIFE_SECONDS = 12;
+const SPEED_STALE_GRACE_MS = 8000;
+const SPEED_STALE_DECAY_MS = 25000;
+const ETA_MAX_SECONDS = 365 * 24 * 60 * 60;
 
 const els = {
   appMain: $(".app-main"),
@@ -86,6 +92,7 @@ const els = {
   progressSubtitle: $("#progressSubtitle"),
   progressCount: $("#progressCount"),
   progressSpeed: $("#progressSpeed"),
+  progressEta: $("#progressEta"),
   progressPercent: $("#progressPercent"),
   progressFill: $("#progressFill"),
   logStatus: $("#logStatus"),
@@ -148,11 +155,14 @@ function saveCurrentStateSync() {
 }
 
 function buildRuntimeForm() {
+  const downloadFiles = estimateDownloadFiles();
+
   return {
     ...readForm(),
     previewTotalFiles: state.repoFiles.length,
     filteredFileCount: filteredRepoFiles({ ignoreSearch: true }).length,
-    selectedFileCount: state.selectedFiles.size
+    selectedFileCount: state.selectedFiles.size,
+    estimatedTotalBytes: sumFileSizes(downloadFiles)
   };
 }
 
@@ -413,6 +423,39 @@ function filteredRepoFiles(options = {}) {
   });
 }
 
+function estimateDownloadFiles() {
+  const explicitFiles = splitSelectedFiles(fieldElement("files").value);
+  if (!explicitFiles.length) {
+    return filteredRepoFiles({ ignoreSearch: true });
+  }
+
+  const include = splitPatternList(fieldElement("include").value);
+  const exclude = splitPatternList(fieldElement("exclude").value);
+  const byPath = new Map(state.repoFiles.map((file) => [file.path, file]));
+  const files = [];
+
+  for (const path of explicitFiles) {
+    if (include.length && !include.some((pattern) => fileMatchesPattern(path, pattern))) {
+      continue;
+    }
+    if (exclude.some((pattern) => fileMatchesPattern(path, pattern))) {
+      continue;
+    }
+
+    const file = byPath.get(path);
+    if (!file) {
+      return [];
+    }
+    files.push(file);
+  }
+
+  return files;
+}
+
+function sumFileSizes(files) {
+  return files.reduce((sum, file) => sum + (Number(file.size) || 0), 0);
+}
+
 function formatBytes(size) {
   const value = Number(size) || 0;
   if (value <= 0) {
@@ -434,19 +477,155 @@ function formatSpeed(bytesPerSecond) {
   return value > 0 ? `${formatBytes(value)}/s` : "-";
 }
 
-function resetSpeed(bytes = 0, progress = state.progress) {
-  state.speed = {
-    key: [progress.repoId || "", progress.endpoint || "", progress.totalBytes || 0].join("|"),
-    lastBytes: Math.max(0, Number(bytes) || 0),
-    lastTime: 0,
-    bytesPerSecond: 0
+function formatDuration(seconds) {
+  const raw = Math.max(0, Math.ceil(Number(seconds) || 0));
+  const value =
+    raw < 60
+      ? Math.ceil(raw / 5) * 5
+      : raw < 10 * 60
+        ? Math.ceil(raw / 10) * 10
+        : raw < 60 * 60
+          ? Math.ceil(raw / 60) * 60
+          : raw < 6 * 60 * 60
+            ? Math.ceil(raw / (5 * 60)) * 5 * 60
+            : raw < 24 * 60 * 60
+              ? Math.ceil(raw / (10 * 60)) * 10 * 60
+              : Math.ceil(raw / (60 * 60)) * 60 * 60;
+
+  if (value < 60) {
+    return `${value} 秒`;
+  }
+
+  const minutes = Math.floor(value / 60);
+  const secondsPart = value % 60;
+  if (minutes < 10 && secondsPart > 0) {
+    return `${minutes} 分 ${secondsPart} 秒`;
+  }
+  if (value < 60 * 60) {
+    return `${minutes} 分钟`;
+  }
+
+  const hours = Math.floor(value / (60 * 60));
+  const remainingMinutes = Math.floor((value % (60 * 60)) / 60);
+  if (hours < 24) {
+    return remainingMinutes ? `${hours} 小时 ${remainingMinutes} 分钟` : `${hours} 小时`;
+  }
+
+  const days = Math.floor(hours / 24);
+  const remainingHours = hours % 24;
+  return remainingHours ? `${days} 天 ${remainingHours} 小时` : `${days} 天`;
+}
+
+function displaySpeed(progress) {
+  const speed = Math.max(0, Number(progress.speedBytesPerSecond) || 0);
+  if (progress.state !== "running" || speed <= 0 || !state.speed.lastProgressTime) {
+    return speed;
+  }
+
+  const staleMs = performance.now() - state.speed.lastProgressTime;
+  if (staleMs <= SPEED_STALE_GRACE_MS) {
+    return speed;
+  }
+
+  return speed * Math.exp(-(staleMs - SPEED_STALE_GRACE_MS) / SPEED_STALE_DECAY_MS);
+}
+
+function stabilizeEtaSeconds(rawSeconds) {
+  const now = performance.now();
+  const previous = Number(state.speed.displayedEtaSeconds) || 0;
+  const lastUpdate = Number(state.speed.lastEtaUpdateTime) || 0;
+
+  if (!previous || !lastUpdate || !Number.isFinite(previous)) {
+    state.speed.displayedEtaSeconds = rawSeconds;
+    state.speed.lastEtaUpdateTime = now;
+    return rawSeconds;
+  }
+
+  const elapsed = Math.max(0, (now - lastUpdate) / 1000);
+  const expected = Math.max(0, previous - elapsed);
+  const delta = rawSeconds - expected;
+  const quietBand = Math.max(15, expected * 0.05);
+
+  let next = expected;
+  if (Math.abs(delta) > quietBand) {
+    const maxStep = Math.max(20, expected * 0.08);
+    next = expected + Math.sign(delta) * Math.min(Math.abs(delta), maxStep);
+  }
+
+  state.speed.displayedEtaSeconds = next;
+  state.speed.lastEtaUpdateTime = now;
+  return next;
+}
+
+function formatEta(progress, speedBytesPerSecond) {
+  if (progress.state === "completed") {
+    return { text: "已完成", title: "剩余 0 秒" };
+  }
+  if (progress.state !== "running") {
+    return { text: "还需时间 -", title: "任务未运行" };
+  }
+
+  const totalBytes = Math.max(0, Number(progress.totalBytes) || 0);
+  const transferredBytes = Math.max(0, Number(progress.transferredBytes) || 0);
+  const speed = Math.max(0, Number(speedBytesPerSecond) || 0);
+  const remainingBytes = totalBytes - transferredBytes;
+
+  if (totalBytes <= 0 || remainingBytes <= 0) {
+    return { text: "还需时间 计算中", title: "等待总大小确认" };
+  }
+  if (speed <= 0) {
+    return { text: "还需时间 计算中", title: "等待速度稳定" };
+  }
+
+  const remainingSeconds = remainingBytes / speed;
+  if (!Number.isFinite(remainingSeconds) || remainingSeconds <= 0 || remainingSeconds > ETA_MAX_SECONDS) {
+    return { text: "还需时间 计算中", title: "等待速度稳定" };
+  }
+
+  const stableSeconds = stabilizeEtaSeconds(remainingSeconds);
+  return {
+    text: `还需约 ${formatDuration(stableSeconds)}`,
+    title: `原始估算约 ${formatDuration(remainingSeconds)}，显示值已做平滑`
   };
+}
+
+function resetSpeed(bytes = 0, progress = state.progress) {
+  const key = [progress.repoId || "", progress.endpoint || ""].join("|");
+  const startBytes = Math.max(0, Number(bytes) || 0);
+  state.speed = {
+    key,
+    startBytes,
+    startTime: 0,
+    lastBytes: startBytes,
+    lastTime: 0,
+    lastProgressTime: 0,
+    bytesPerSecond: 0,
+    displayedEtaSeconds: 0,
+    lastEtaUpdateTime: 0,
+    samples: []
+  };
+}
+
+function sampleWindowSpeed(samples) {
+  if (samples.length < 2) {
+    return 0;
+  }
+
+  const newest = samples[samples.length - 1];
+  const oldest = samples[0];
+  const elapsedMs = newest.time - oldest.time;
+  const deltaBytes = newest.bytes - oldest.bytes;
+
+  if (elapsedMs < SPEED_MIN_WINDOW_MS || deltaBytes <= 0) {
+    return 0;
+  }
+
+  return deltaBytes / (elapsedMs / 1000);
 }
 
 function updateDownloadSpeed(progress) {
   const bytes = Math.max(0, Number(progress.transferredBytes) || 0);
-  const totalBytes = Math.max(0, Number(progress.totalBytes) || 0);
-  const key = [progress.repoId || "", progress.endpoint || "", totalBytes].join("|");
+  const key = [progress.repoId || "", progress.endpoint || ""].join("|");
   const now = performance.now();
 
   if (progress.state !== "running") {
@@ -456,32 +635,49 @@ function updateDownloadSpeed(progress) {
   }
 
   if (state.speed.key !== key || bytes < state.speed.lastBytes) {
-    state.speed = {
-      key,
-      lastBytes: bytes,
-      lastTime: now,
-      bytesPerSecond: 0
-    };
+    resetSpeed(bytes, progress);
     progress.speedBytesPerSecond = 0;
     return progress;
   }
 
-  if (!state.speed.lastTime) {
+  if (!state.speed.startTime) {
+    state.speed.startBytes = bytes;
+    state.speed.startTime = now;
     state.speed.lastBytes = bytes;
     state.speed.lastTime = now;
+    state.speed.samples = [{ time: now, bytes }];
     progress.speedBytesPerSecond = state.speed.bytesPerSecond;
     return progress;
   }
 
-  const elapsed = (now - state.speed.lastTime) / 1000;
-  const delta = bytes - state.speed.lastBytes;
+  if (bytes !== state.speed.lastBytes || now - state.speed.lastTime >= 1000) {
+    state.speed.samples.push({ time: now, bytes });
+    while (state.speed.samples.length > 2 && state.speed.samples[1].time < now - SPEED_SAMPLE_WINDOW_MS) {
+      state.speed.samples.shift();
+    }
+  }
 
-  if (elapsed >= 0.35) {
-    const instant = delta > 0 ? delta / elapsed : 0;
+  const delta = bytes - state.speed.lastBytes;
+  const elapsed = (now - state.speed.lastTime) / 1000;
+  const sessionElapsed = (now - state.speed.startTime) / 1000;
+  const averageSpeed =
+    sessionElapsed >= 1 && bytes > state.speed.startBytes ? (bytes - state.speed.startBytes) / sessionElapsed : 0;
+  const recentSpeed = sampleWindowSpeed(state.speed.samples);
+  const targetSpeed =
+    recentSpeed > 0 && sessionElapsed >= 15 ? recentSpeed * 0.7 + averageSpeed * 0.3 : averageSpeed || recentSpeed;
+
+  if (elapsed >= 0.5 && targetSpeed > 0) {
+    const alpha = Math.min(0.35, 1 - Math.exp(-elapsed / SPEED_EWMA_HALF_LIFE_SECONDS));
     state.speed.bytesPerSecond =
-      state.speed.bytesPerSecond > 0 ? state.speed.bytesPerSecond * 0.65 + instant * 0.35 : instant;
+      state.speed.bytesPerSecond > 0 ? state.speed.bytesPerSecond * (1 - alpha) + targetSpeed * alpha : targetSpeed;
+  }
+
+  if (elapsed >= 0.5) {
     state.speed.lastBytes = bytes;
     state.speed.lastTime = now;
+  }
+  if (delta > 0) {
+    state.speed.lastProgressTime = now;
   }
 
   progress.speedBytesPerSecond = state.speed.bytesPerSecond;
@@ -491,7 +687,7 @@ function updateDownloadSpeed(progress) {
 updateProgressView = function updateProgressViewBytes(progress = state.progress) {
   const totalBytes = Number(progress.totalBytes) || 0;
   const transferredBytes = Number(progress.transferredBytes) || 0;
-  const speedBytesPerSecond = Number(progress.speedBytesPerSecond) || 0;
+  const speedBytesPerSecond = displaySpeed(progress);
   const percent = Number.isFinite(progress.percent) ? Math.max(0, Math.min(100, Math.round(progress.percent))) : 0;
   const stateName = ["completed", "failed", "canceled", "running", "stopping"].includes(progress.state)
     ? progress.state
@@ -512,9 +708,20 @@ updateProgressView = function updateProgressViewBytes(progress = state.progress)
   els.progressCount.textContent =
     totalBytes > 0 ? `${formatBytes(Math.min(transferredBytes, totalBytes))} / ${formatBytes(totalBytes)}` : "总大小待确认";
   els.progressSpeed.textContent = progress.state === "running" ? formatSpeed(speedBytesPerSecond) : "-";
+  const eta = formatEta(progress, speedBytesPerSecond);
+  els.progressEta.textContent = eta.text;
+  els.progressEta.title = eta.title;
   els.progressPercent.textContent = `${percent}%`;
   els.progressFill.style.width = `${percent}%`;
 };
+
+function initProgressRefreshTimer() {
+  window.setInterval(() => {
+    if (state.progress.state === "running") {
+      updateProgressView();
+    }
+  }, 1000);
+}
 
 function syncSelectedFilesFromTextarea() {
   state.selectedFiles = new Set(splitSelectedFiles(fieldElement("files").value));
@@ -604,6 +811,11 @@ async function loadRepoFiles() {
     const result = await window.hfBridge.listRepoFiles(buildRuntimeForm());
     state.repoFiles = result.files || [];
     els.filePreviewStatus.textContent = `${result.endpoint} · ${result.revision}`;
+    if (result.directUrls) {
+      state.selectedFiles = new Set(state.repoFiles.map((file) => file.path));
+      syncTextareaFromSelectedFiles();
+      els.filePreviewStatus.textContent = `${result.endpoint} · 已解析 ${result.total} 个文件链接`;
+    }
     appendLog(`[预览] 已加载 ${result.total} 个文件。\n`);
     renderFileList();
   } catch (error) {
@@ -1214,6 +1426,7 @@ function bindEvents() {
 async function init() {
   bindEvents();
   initPaneResize();
+  initProgressRefreshTimer();
   resetProgress();
   if (els.appVersion && window.hfBridge.getAppVersion) {
     try {

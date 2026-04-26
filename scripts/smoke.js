@@ -73,6 +73,59 @@ assert.ok(datasetPlan.args.includes("--repo-type"));
 assert.ok(datasetPlan.args.includes("dataset"));
 assert.equal(datasetPlan.env.HF_ENDPOINT, undefined);
 
+const directUrlPlan = buildDownloadPlan(
+  {
+    repoType: "model",
+    repoId:
+      "https://huggingface.co/Comfy-Org/z_image_turbo/resolve/main/split_files/diffusion_models/z_image_turbo_bf16.safetensors",
+    files: "stale-selection.bin",
+    localDir: "C:\\models\\z-image",
+    source: "mirror",
+    include: "*.json",
+    exclude: "*.bin",
+    maxWorkers: 8
+  },
+  "hf"
+);
+
+assert.equal(directUrlPlan.directUrls, true);
+assert.equal(directUrlPlan.multiCommand, false);
+assert.equal(directUrlPlan.normalizedForm.repoId, "Comfy-Org/z_image_turbo");
+assert.equal(directUrlPlan.normalizedForm.revision, "main");
+assert.equal(directUrlPlan.normalizedForm.files, "split_files/diffusion_models/z_image_turbo_bf16.safetensors");
+assert.ok(!directUrlPlan.args.includes("stale-selection.bin"));
+assert.ok(!directUrlPlan.args.includes("--include"));
+assert.deepEqual(directUrlPlan.args.slice(0, 3), [
+  "download",
+  "Comfy-Org/z_image_turbo",
+  "split_files/diffusion_models/z_image_turbo_bf16.safetensors"
+]);
+
+const directMultiPlan = buildDownloadPlan(
+  {
+    repoType: "model",
+    repoId:
+      "https://huggingface.co/Comfy-Org/z_image_turbo/resolve/main/a.safetensors\nhttps://huggingface.co/gpt2/resolve/main/config.json",
+    source: "official",
+    maxWorkers: 8
+  },
+  "hf"
+);
+assert.equal(directMultiPlan.directUrlCount, 2);
+assert.equal(directMultiPlan.multiCommand, true);
+assert.equal(directMultiPlan.downloadSpecs.length, 2);
+assert.ok(directMultiPlan.maskedCommand.includes("\n"));
+
+assert.throws(
+  () =>
+    buildDownloadPlan({
+      repoType: "model",
+      repoId: "gpt2\nhttps://huggingface.co/gpt2/resolve/main/config.json",
+      source: "official"
+    }),
+  /不能混用/
+);
+
 assert.throws(() => buildDownloadPlan({ repoType: "model", repoId: "", source: "official" }), /仓库 ID/);
 
 const historyItem = createHistoryItem("history-1", { ...modelPlan, repoId: "gpt2", token: "hf_secret" }, modelPlan);
@@ -92,6 +145,13 @@ assert.equal(favoriteResult.library.favorites[0].form.token, undefined);
 let queue = appendQueueItem(normalizeQueue(), createQueueItem("queue-1", { repoType: "model", repoId: "gpt2" }, modelPlan));
 assert.equal(queue.items.length, 1);
 assert.equal(nextQueuedItem(queue).id, "queue-1");
+const queuedEstimate = createQueueItem(
+  "queue-estimate",
+  { repoType: "model", repoId: "gpt2", previewTotalFiles: 2, estimatedTotalBytes: 123456 },
+  modelPlan
+);
+assert.equal(queuedEstimate.form.previewTotalFiles, 2);
+assert.equal(queuedEstimate.form.estimatedTotalBytes, 123456);
 queue = updateQueueItem(queue, "queue-1", { status: "running" });
 assert.equal(queue.items[0].status, "running");
 assert.equal(normalizeQueue({ items: [{ id: "queue-2", status: "queued" }] }).items[0].status, "queued");

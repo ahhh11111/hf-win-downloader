@@ -77,8 +77,16 @@
           </div>
 
           <div class="field-group">
-            <label for="repoId">仓库 ID</label>
-            <input id="repoId" name="repoId" autocomplete="off" spellcheck="false" placeholder="Wan-AI/Wan2.2-Animate-14B" />
+            <label for="repoId">仓库 ID / 文件链接</label>
+            <textarea
+              class="repo-id-input"
+              id="repoId"
+              name="repoId"
+              autocomplete="off"
+              spellcheck="false"
+              rows="3"
+              placeholder="Wan-AI/Wan2.2-Animate-14B 或 Hugging Face 文件链接，每行一个"
+            ></textarea>
           </div>
 
           <div class="two-col">
@@ -298,6 +306,7 @@
                 <div class="progress-metrics">
                   <span id="progressCount">总大小待确认</span>
                   <span class="progress-speed" id="progressSpeed">-</span>
+                  <span class="progress-eta" id="progressEta">还需时间 -</span>
                   <span id="progressPercent">0%</span>
                 </div>
               </div>

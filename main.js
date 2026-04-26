@@ -1,11 +1,19 @@
-const { app, BrowserWindow, ipcMain, dialog, shell, clipboard } = require("electron");
+const { app, BrowserWindow, ipcMain, dialog, shell, clipboard, net, session } = require("electron");
 const { spawn } = require("node:child_process");
 const crypto = require("node:crypto");
 const fsSync = require("node:fs");
 const fs = require("node:fs/promises");
 const os = require("node:os");
 const path = require("node:path");
-const { buildDownloadPlan, DEFAULT_ENDPOINT, MIRROR_ENDPOINT, normalizeEndpoint, splitFilenames, splitList } = require("./src/command");
+const {
+  buildDownloadPlan,
+  DEFAULT_ENDPOINT,
+  MIRROR_ENDPOINT,
+  normalizeDownloadForm,
+  normalizeEndpoint,
+  splitFilenames,
+  splitList
+} = require("./src/command");
 const {
   createFavoriteItem,
   createHistoryItem,
@@ -52,26 +60,32 @@ function structuredPhaseText(phase) {
   return "正在准备下载任务";
 }
 
-function createProgressTracker(kind, form, plan) {
-  const explicitFiles = splitFilenames(form.files);
+function createProgressTracker(kind, form, plan = {}) {
+  const runtimeForm = plan.normalizedForm || form;
+  const explicitFiles = splitFilenames(runtimeForm.files);
   const filteredFileCount = Number.isFinite(Number(form.filteredFileCount)) ? Number(form.filteredFileCount) : 0;
   const previewTotalFiles = Number.isFinite(Number(form.previewTotalFiles)) ? Number(form.previewTotalFiles) : 0;
-  const hasScopedFilters = Boolean(cleanText(form.include) || cleanText(form.exclude));
+  const hasScopedFilters = Boolean(cleanText(runtimeForm.include) || cleanText(runtimeForm.exclude));
   const estimatedTotal =
     explicitFiles.length ||
     (hasScopedFilters ? filteredFileCount : Math.max(previewTotalFiles, filteredFileCount)) ||
     0;
+  const estimatedTotalBytes = Number.isFinite(Number(form.estimatedTotalBytes))
+    ? Math.max(0, Number(form.estimatedTotalBytes))
+    : 0;
 
   return {
     kind,
     state: "running",
-    repoId: cleanText(form.repoId),
+    repoId: cleanText(plan.displayRepoId) || cleanText(runtimeForm.repoId) || cleanText(form.repoId),
     endpoint: plan.endpoint,
     totalFiles: estimatedTotal,
     completedFiles: 0,
-    totalBytes: 0,
+    totalBytes: estimatedTotalBytes,
+    estimatedTotalBytes,
     transferredBytes: 0,
     percent: 0,
+    structuredProgressBars: {},
     currentFile: explicitFiles.length === 1 ? explicitFiles[0] : "",
     phase: explicitFiles.length ? "准备下载已选文件" : estimatedTotal ? "准备下载筛选结果" : "等待仓库返回文件清单"
   };
@@ -97,9 +111,10 @@ function emitProgress(tracker) {
     percent = Math.max(percent, Math.round((Math.min(completedFiles, totalFiles) / totalFiles) * 100));
   }
   percent = Math.min(percent, 100);
+  const { structuredProgressBars, ...progressPayload } = tracker;
 
   emit("process:progress", {
-    ...tracker,
+    ...progressPayload,
     totalBytes,
     transferredBytes: totalBytes > 0 ? Math.min(transferredBytes, totalBytes) : transferredBytes,
     totalFiles,
@@ -170,28 +185,66 @@ function updateProgressFromOutput(tracker, text) {
   return changed;
 }
 
+function summarizeStructuredProgressBars(tracker) {
+  return Object.values(tracker.structuredProgressBars || {}).reduce(
+    (summary, item) => {
+      const totalBytes = Math.max(0, Number(item.totalBytes) || 0);
+      const downloadedBytes = Math.max(0, Number(item.downloadedBytes) || 0);
+      summary.totalBytes += totalBytes;
+      summary.downloadedBytes += Math.min(downloadedBytes, totalBytes || downloadedBytes);
+      return summary;
+    },
+    { totalBytes: 0, downloadedBytes: 0 }
+  );
+}
+
 function applyStructuredProgressEvent(tracker, payload) {
   if (!tracker || payload?.event !== "progress") {
     return false;
   }
 
+  const estimatedTotalBytes = Math.max(0, Number(tracker.estimatedTotalBytes) || 0);
   const payloadTotalBytes = Number(payload.total_bytes);
   const payloadDownloadedBytes = Number(payload.downloaded_bytes);
   const payloadPercent = Number(payload.percent);
+  const progressId = cleanText(payload.progress_id);
 
-  if (Number.isFinite(Number(payload.total_bytes))) {
-    tracker.totalBytes = Math.max(0, payloadTotalBytes);
+  if (progressId && (Number.isFinite(payloadTotalBytes) || Number.isFinite(payloadDownloadedBytes))) {
+    tracker.structuredProgressBars = tracker.structuredProgressBars || {};
+    tracker.structuredProgressBars[progressId] = {
+      totalBytes: Math.max(0, Number.isFinite(payloadTotalBytes) ? payloadTotalBytes : 0),
+      downloadedBytes: Math.max(0, Number.isFinite(payloadDownloadedBytes) ? payloadDownloadedBytes : 0)
+    };
+
+    const structuredSummary = summarizeStructuredProgressBars(tracker);
+    if (estimatedTotalBytes > 0) {
+      tracker.totalBytes = estimatedTotalBytes;
+      tracker.transferredBytes = structuredSummary.downloadedBytes;
+    } else if (structuredSummary.totalBytes > 0) {
+      tracker.totalBytes = structuredSummary.totalBytes;
+      tracker.transferredBytes = structuredSummary.downloadedBytes;
+    }
+  } else {
+    if (Number.isFinite(payloadTotalBytes)) {
+      tracker.totalBytes = estimatedTotalBytes || Math.max(0, payloadTotalBytes);
+    }
+    if (Number.isFinite(payloadDownloadedBytes)) {
+      tracker.transferredBytes = Math.max(0, payloadDownloadedBytes);
+    }
   }
-  if (Number.isFinite(Number(payload.downloaded_bytes))) {
-    tracker.transferredBytes = Math.max(0, payloadDownloadedBytes);
+
+  if (estimatedTotalBytes > 0) {
+    tracker.totalBytes = estimatedTotalBytes;
+    tracker.transferredBytes = Math.min(Math.max(0, tracker.transferredBytes), estimatedTotalBytes);
   }
+
   if (Number.isFinite(Number(payload.percent))) {
     tracker.percent = Math.max(0, payloadPercent);
   }
 
   const completeByBytes = tracker.totalBytes > 0 && tracker.transferredBytes >= tracker.totalBytes;
   const completeByPercent = Number.isFinite(payloadPercent) && payloadPercent >= 100;
-  const isComplete = payload.phase === "completed" && (completeByBytes || completeByPercent);
+  const isComplete = payload.phase === "completed" && !progressId && (completeByBytes || completeByPercent);
   const phase = isComplete ? "completed" : payload.phase === "completed" ? "downloading" : payload.phase;
 
   if (phase) {
@@ -360,6 +413,19 @@ function shouldBypassProxy(endpoint) {
   return hostname === "hf-mirror.com" || hostname.endsWith(".hf-mirror.com");
 }
 
+function shouldUseSystemProxy(form) {
+  const endpoint = normalizeEndpoint(form) || DEFAULT_ENDPOINT;
+  return !shouldBypassProxy(endpoint);
+}
+
+async function resolveProxyInfo(url) {
+  try {
+    return await session.defaultSession.resolveProxy(url);
+  } catch {
+    return "";
+  }
+}
+
 function mergeNoProxy(existingValue, hosts) {
   const values = String(existingValue || "")
     .split(",")
@@ -434,6 +500,10 @@ function filteredExplicitFiles(form) {
   });
 }
 
+function effectiveDownloadForm(form, plan = null) {
+  return plan?.normalizedForm || normalizeDownloadForm(form);
+}
+
 function repoPathSegments(filePath) {
   return String(filePath)
     .replace(/\\/g, "/")
@@ -460,13 +530,14 @@ function commonDirectory(directories) {
   return common;
 }
 
-function resolveDownloadDirectory(form) {
-  const localDir = cleanText(form?.localDir);
+function resolveDownloadDirectory(form, plan = null) {
+  const effectiveForm = effectiveDownloadForm(form, plan);
+  const localDir = cleanText(effectiveForm?.localDir);
   if (!localDir) {
     return "";
   }
 
-  const explicitFiles = filteredExplicitFiles(form);
+  const explicitFiles = filteredExplicitFiles(effectiveForm);
   if (!explicitFiles.length) {
     return path.resolve(localDir);
   }
@@ -479,8 +550,8 @@ function resolveDownloadDirectory(form) {
   return commonDirectory(directories) || path.resolve(localDir);
 }
 
-function withDownloadDirectory(item, form) {
-  const downloadDir = resolveDownloadDirectory(form);
+function withDownloadDirectory(item, form, plan = null) {
+  const downloadDir = resolveDownloadDirectory(form, plan);
   return downloadDir ? { ...item, downloadDir } : item;
 }
 
@@ -768,13 +839,15 @@ async function fetchJson(url, form) {
   const timeout = setTimeout(() => controller.abort(), 30000);
   const token = cleanText(form.token);
   const headers = { Accept: "application/json" };
+  const useSystemProxy = shouldUseSystemProxy(form);
+  const request = useSystemProxy ? net.fetch.bind(net) : fetch;
 
   if (token) {
     headers.Authorization = `Bearer ${token}`;
   }
 
   try {
-    const response = await fetch(url, { headers, signal: controller.signal });
+    const response = await request(url, { headers, signal: controller.signal });
     const text = await response.text();
 
     if (!response.ok) {
@@ -796,15 +869,18 @@ async function fetchJson(url, form) {
     if (error.name === "AbortError") {
       throw new Error("文件列表请求超时。");
     }
-    throw error;
+    const proxyInfo = useSystemProxy ? await resolveProxyInfo(url) : "DIRECT";
+    const proxyText = proxyInfo ? `（代理：${proxyInfo}）` : "";
+    throw new Error(`文件列表请求失败：${error.message}${proxyText}`);
   } finally {
     clearTimeout(timeout);
   }
 }
 
 async function listRepoFiles(form) {
-  const repoId = cleanText(form.repoId);
-  const repoType = cleanText(form.repoType) || "model";
+  const effectiveForm = effectiveDownloadForm(form);
+  const repoId = cleanText(effectiveForm.repoId);
+  const repoType = cleanText(effectiveForm.repoType) || "model";
 
   if (!repoId) {
     throw new Error("请输入仓库 ID 后再预览文件。");
@@ -813,7 +889,33 @@ async function listRepoFiles(form) {
     throw new Error("仓库类型只能是 model、dataset 或 space。");
   }
 
-  let url = repoTreeUrl(form);
+  if (effectiveForm.directUrls) {
+    const files = [];
+    for (const spec of effectiveForm.downloadSpecs || []) {
+      for (const filePath of spec.files || []) {
+        files.push({
+          path: filePath,
+          size: 0,
+          lfs: false,
+          oid: "",
+          repoType: spec.repoType,
+          repoId: spec.repoId,
+          revision: spec.revision
+        });
+      }
+    }
+
+    return {
+      endpoint: normalizeEndpoint(form) || DEFAULT_ENDPOINT,
+      revision:
+        effectiveForm.downloadSpecs?.length === 1 ? effectiveForm.downloadSpecs[0].revision : "multiple revisions",
+      total: files.length,
+      directUrls: true,
+      files
+    };
+  }
+
+  let url = repoTreeUrl(effectiveForm);
   const files = [];
   let pages = 0;
 
@@ -841,8 +943,8 @@ async function listRepoFiles(form) {
 
   files.sort((left, right) => left.path.localeCompare(right.path, "en"));
   return {
-    endpoint: normalizeEndpoint(form) || DEFAULT_ENDPOINT,
-    revision: cleanText(form.revision) || "main",
+    endpoint: normalizeEndpoint(effectiveForm) || DEFAULT_ENDPOINT,
+    revision: cleanText(effectiveForm.revision) || "main",
     total: files.length,
     files
   };
@@ -1114,7 +1216,7 @@ ipcMain.handle("queue:load", () => queueState);
 ipcMain.handle("queue:add", async (_event, form) => {
   const cli = await resolveCli();
   const plan = buildDownloadPlan(form, cli?.name ?? "hf");
-  const item = withDownloadDirectory(createQueueItem(randomId("queue"), form, plan), form);
+  const item = withDownloadDirectory(createQueueItem(randomId("queue"), form, plan), form, plan);
   return publishQueue(appendQueueItem(queueState, item));
 });
 
@@ -1303,6 +1405,9 @@ ipcMain.handle("download:start", async (_event, form) => {
 
   const cli = runtime.cli ?? { name: "hf", path: "" };
   const plan = buildDownloadPlan(form, cli.name);
+  if (plan.multiCommand && runtime.kind !== "python") {
+    throw new Error("多个链接跨仓库或版本时需要 Python / huggingface_hub 运行时；请安装/更新 CLI，或拆分链接后分别下载。");
+  }
   const progressTracker = createProgressTracker("download", form, plan);
   const { item } = await appendHistory(form, plan);
   activeHistoryId = item.id;
@@ -1315,7 +1420,7 @@ ipcMain.handle("download:start", async (_event, form) => {
       progressTracker,
       structuredProgress: true,
       bypassProxyEndpoint: plan.endpoint,
-      stdinText: JSON.stringify({ form })
+      stdinText: JSON.stringify({ form: plan.normalizedForm || form, downloadSpecs: plan.downloadSpecs })
     });
   } else {
     spawnManaged(cli.path, plan.args, plan.env, "download", {
@@ -1360,6 +1465,9 @@ async function startNextQueueItem() {
     }
     cli = runtime.cli ?? { name: "hf", path: "" };
     plan = buildDownloadPlan(item.form, cli.name);
+    if (plan.multiCommand && runtime.kind !== "python") {
+      throw new Error("多个链接跨仓库或版本时需要 Python / huggingface_hub 运行时；请拆分链接后分别下载。");
+    }
   } catch (error) {
     queueState = updateQueueItem(queueState, item.id, {
       status: "failed",
@@ -1382,10 +1490,10 @@ async function startNextQueueItem() {
     historyId: historyItem.id,
     endpoint: plan.endpoint,
     command: plan.maskedCommand,
-    downloadDir: resolveDownloadDirectory(item.form)
+    downloadDir: resolveDownloadDirectory(item.form, plan)
   });
   await publishQueue(queueState);
-  recordLog("stdout", `[队列] 开始 ${item.repoId}\n[命令] ${plan.maskedCommand}\n`);
+  recordLog("stdout", `[队列] 开始 ${cleanText(plan.displayRepoId) || item.repoId}\n[命令] ${plan.maskedCommand}\n`);
   emitProgress(progressTracker);
 
   if (runtime.kind === "python") {
@@ -1395,7 +1503,7 @@ async function startNextQueueItem() {
       progressTracker,
       structuredProgress: true,
       bypassProxyEndpoint: plan.endpoint,
-      stdinText: JSON.stringify({ form: item.form })
+      stdinText: JSON.stringify({ form: plan.normalizedForm || item.form, downloadSpecs: plan.downloadSpecs })
     });
   } else {
     spawnManaged(cli.path, plan.args, plan.env, "download", {

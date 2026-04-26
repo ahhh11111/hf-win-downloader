@@ -6,6 +6,17 @@ function cleanText(value) {
   return String(value ?? "").trim();
 }
 
+function displayRepoId(form, plan) {
+  return cleanText(plan?.displayRepoId) || cleanText(form?.repoId);
+}
+
+function copyRuntimeNumber(source, target, key) {
+  const value = Number(source?.[key]);
+  if (Number.isFinite(value) && value >= 0) {
+    target[key] = value;
+  }
+}
+
 function normalizeQueue(raw) {
   const items = Array.isArray(raw?.items) ? raw.items : [];
   return {
@@ -20,6 +31,13 @@ function normalizeQueue(raw) {
 
 function createQueueItem(id, form, plan, createdAt = new Date().toISOString()) {
   const snapshot = formSnapshot(form);
+  const runtimeSnapshot = { ...snapshot };
+  const repoId = displayRepoId(snapshot, plan);
+  copyRuntimeNumber(form, runtimeSnapshot, "previewTotalFiles");
+  copyRuntimeNumber(form, runtimeSnapshot, "filteredFileCount");
+  copyRuntimeNumber(form, runtimeSnapshot, "selectedFileCount");
+  copyRuntimeNumber(form, runtimeSnapshot, "estimatedTotalBytes");
+
   return {
     id,
     createdAt,
@@ -29,14 +47,14 @@ function createQueueItem(id, form, plan, createdAt = new Date().toISOString()) {
     status: "queued",
     exitCode: null,
     historyId: "",
-    title: cleanText(snapshot.repoId) || "未命名仓库",
+    title: repoId || "未命名仓库",
     repoType: cleanText(snapshot.repoType) || "model",
-    repoId: cleanText(snapshot.repoId),
+    repoId,
     localDir: cleanText(snapshot.localDir),
     endpoint: plan.endpoint,
     command: plan.maskedCommand,
     summary: [cleanText(snapshot.repoType) || "model", plan.endpoint].filter(Boolean).join(" · "),
-    form: snapshot
+    form: runtimeSnapshot
   };
 }
 

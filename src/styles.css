@@ -428,6 +428,13 @@ textarea {
   line-height: 1.55;
 }
 
+.repo-id-input {
+  min-height: 74px;
+  max-height: 170px;
+  font-family: "Cascadia Mono", "Consolas", monospace;
+  font-size: 12px;
+}
+
 input::placeholder,
 textarea::placeholder {
   color: var(--faint);
@@ -1051,6 +1058,16 @@ input:disabled {
   white-space: nowrap;
 }
 
+.progress-eta {
+  min-width: 0;
+  overflow: hidden;
+  color: #3f4a59;
+  font-size: 12px;
+  font-weight: 750;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 #progressPercent {
   color: var(--accent);
   font-size: 26px;
@@ -1453,7 +1470,8 @@ input:disabled {
     grid-template-columns: 1fr auto;
     grid-template-areas:
       "count percent"
-      "speed percent";
+      "speed percent"
+      "eta percent";
     align-items: end;
     justify-items: stretch;
   }
@@ -1464,6 +1482,10 @@ input:disabled {
 
   .progress-speed {
     grid-area: speed;
+  }
+
+  .progress-eta {
+    grid-area: eta;
   }
 
   #progressPercent {
